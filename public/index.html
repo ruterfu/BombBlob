@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0b0e16" />
+  <title>BombBlob</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='46' cy='56' r='34' fill='%23ffb547'/><rect x='58' y='10' width='10' height='22' fill='%23ffb547' transform='rotate(35 63 21)'/></svg>" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <script type="importmap">
+    { "imports": { "three": "/vendor/three.module.js", "three/addons/": "/vendor/addons/" } }
+  </script>
+</head>
+<body>
+  <!-- 3D 菜单舞台（登录 / 大厅 / 房间背后实时渲染） -->
+  <div id="stage"></div>
+  <div id="vignette"></div>
+
+  <!-- 启动加载画面 -->
+  <div id="boot">
+    <div class="wordmark big"><span>BOMB</span><b>BLOB</b></div>
+    <div class="boot-bar"><i></i></div>
+    <div class="boot-tip">LOADING ARENA</div>
+  </div>
+
+  <!-- ========== 登录 ========== -->
+  <section id="screen-login" class="screen hidden">
+    <div class="title-logo">
+      <div class="wordmark"><span>BOMB</span><b>BLOB</b></div>
+      <div class="tagline"><i></i><span data-i18n="tagline"></span></div>
+    </div>
+    <div class="panel login-panel">
+      <div class="panel-head"><span data-i18n="login.head"></span><small>SIGN IN</small></div>
+      <div id="login-loading" class="loading hidden"><div class="spinner"></div><span data-i18n="login.restoring"></span></div>
+      <div id="login-form">
+        <div id="login-notice" class="notice hidden"></div>
+        <div id="github-block" class="hidden">
+          <button id="btn-github" class="btn btn-github btn-huge"><i data-icon="github"></i><span data-i18n="login.github"></span></button>
+          <p class="hint" data-i18n="login.githubHint"></p>
+        </div>
+        <div id="login-split" class="divider hidden"><span>OR</span></div>
+        <div id="guest-block" class="hidden">
+          <button id="btn-guest" class="btn btn-yellow btn-huge"><i data-icon="play"></i><span data-i18n="login.guest"></span></button>
+          <p class="hint" data-i18n="login.guestHint"></p>
+          <!-- 8 位 ID 登录：只在游客模式开启时可用 -->
+          <button type="button" class="link-btn id-toggle" id="btn-id-toggle"><i data-icon="key"></i><span data-i18n="login.haveId"></span></button>
+          <div class="id-row hidden" id="id-row">
+            <input id="login-id" class="game-input digits" inputmode="numeric" maxlength="8" data-i18n-ph="login.idPlaceholder" autocomplete="off" spellcheck="false" />
+            <button id="btn-id-login" class="btn btn-blue" data-i18n="login.idBtn"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="corner-lang"><i data-icon="globe"></i><div class="lang-seg"><button data-lang="zh">简体中文</button><button data-lang="zh-HK">繁體中文</button><button data-lang="ja">日本語</button><button data-lang="en">English</button></div></div>
+    <div class="corner-tip"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <span data-i18n="tip.move"></span>　<kbd>SPACE</kbd> <span data-i18n="tip.bomb"></span></div>
+  </section>
+
+  <!-- ========== 创建角色（新账号首次登录） ========== -->
+  <section id="screen-create" class="screen hidden">
+    <div class="title-logo">
+      <div class="wordmark"><span>BOMB</span><b>BLOB</b></div>
+      <div class="tagline"><i></i><span data-i18n="char.tagline"></span></div>
+    </div>
+    <div class="panel login-panel char-panel">
+      <div class="panel-head"><span data-i18n="char.title"></span><small>NEW CHARACTER</small></div>
+      <p class="hint" data-i18n="char.hint"></p>
+      <div class="label"><i data-icon="user"></i><span data-i18n="char.name"></span></div>
+      <input id="char-name" class="game-input" maxlength="8" data-i18n-ph="char.namePlaceholder" autocomplete="off" spellcheck="false" />
+      <div class="label sm"><span data-i18n="common.color"></span></div>
+      <div id="char-skins" class="swatches"></div>
+      <div class="label sm"><span data-i18n="common.hat"></span></div>
+      <div id="char-hats" class="chips"></div>
+      <button id="btn-create-char" class="btn btn-yellow btn-huge"><i data-icon="play"></i><span data-i18n="char.ok"></span></button>
+    </div>
+  </section>
+
+  <!-- ========== 大厅 ========== -->
+  <section id="screen-lobby" class="screen hidden">
+    <div class="hud-bar">
+      <div class="player-badge" id="lobby-me"></div>
+      <div class="bar-right">
+        <button class="currency points-pill" id="points-pill" data-i18n-title="shop.title"><i data-icon="gem"></i><b>0</b><small data-i18n="shop.open"></small></button>
+<div class="ping-badge"><i class="bars"><b></b><b></b><b></b><b></b></i><span>--</span><small>ms</small></div>
+        <div class="currency online" id="online-pill"><i class="dot"></i><b>0</b><small data-i18n="lobby.online"></small></div>
+        <button class="btn btn-icon" id="btn-history" data-i18n-title="history.title"><i data-icon="history"></i></button>
+        <button class="btn btn-icon" id="btn-profile" data-i18n-title="title.profile"><i data-icon="shirt"></i></button>
+        <button class="btn btn-icon sound-btn" data-i18n-title="title.settings"><i data-icon="gear"></i></button>
+        <button class="btn btn-icon fs-btn" data-i18n-title="title.fullscreen"><i data-icon="expand"></i></button>
+        <button class="btn btn-icon btn-red-icon" id="btn-logout" data-i18n-title="title.logout"><i data-icon="logout"></i></button>
+      </div>
+    </div>
+    <div class="lobby-actions">
+      <button class="btn btn-yellow btn-mega" id="btn-quick"><span class="big"><i data-icon="bolt"></i><span data-i18n="lobby.quick"></span></span><small data-i18n="lobby.quickSub"></small></button>
+      <button class="btn btn-pink btn-mega" id="btn-create"><span class="big"><i data-icon="plus"></i><span data-i18n="lobby.create"></span></span><small data-i18n="lobby.createSub"></small></button>
+    </div>
+    <div class="panel lobby-panel">
+      <div class="tabs" id="lobby-tabs">
+        <button class="tab on" data-tab="rooms"><i data-icon="home"></i><span data-i18n="tab.rooms"></span></button>
+        <button class="tab" data-tab="rank"><i data-icon="trophy"></i><span data-i18n="tab.rank"></span></button>
+        <button class="tab" data-tab="chat"><i data-icon="chat"></i><span data-i18n="tab.chat"></span></button>
+      </div>
+      <div class="tab-body" data-tab="rooms">
+        <div class="list-head"><span data-i18n="lobby.roomList"></span><button class="btn btn-small btn-blue" id="btn-refresh"><i data-icon="refresh"></i><span data-i18n="common.refresh"></span></button></div>
+        <div id="room-list" class="room-list scroll"></div>
+      </div>
+      <div class="tab-body hidden" data-tab="rank">
+        <ol id="leaderboard" class="leaderboard scroll"></ol>
+      </div>
+      <div class="tab-body hidden" data-tab="chat">
+        <div class="chat-log scroll" id="lobby-chat"></div>
+        <form class="chat-form" data-scope="lobby"><input class="game-input" maxlength="120" data-i18n-ph="chat.placeholder" /><button class="btn btn-blue btn-small" data-i18n="chat.send"></button></form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 房间 ========== -->
+  <section id="screen-room" class="screen hidden">
+    <div class="hud-bar">
+      <button class="btn btn-icon btn-back" id="btn-leave-room" data-i18n-title="title.leaveRoom"><i data-icon="back"></i></button>
+      <div class="room-ribbon"><small>ROOM <b id="room-id"></b></small><span id="room-name"></span><em id="room-pw" class="room-pw hidden"></em></div>
+      <div class="bar-right">
+        <div class="ping-badge"><i class="bars"><b></b><b></b><b></b><b></b></i><span>--</span><small>ms</small></div>
+        <button class="btn btn-icon sound-btn" data-i18n-title="title.settings"><i data-icon="gear"></i></button>
+        <button class="btn btn-icon fs-btn" data-i18n-title="title.fullscreen"><i data-icon="expand"></i></button>
+      </div>
+    </div>
+    <div class="panel room-members">
+      <div class="panel-title"><span data-i18n="room.players"></span> <b id="room-count"></b></div>
+      <div id="slots" class="member-list"></div>
+    </div>
+    <div class="panel room-settings">
+      <div class="panel-title"><span data-i18n="room.map"></span> <small id="map-host-hint"></small></div>
+      <div id="map-picker" class="map-picker"></div>
+      <div class="seg-row">
+        <div class="seg" id="mode-seg"><button data-v="ffa" data-i18n="mode.ffa"></button><button data-v="team" data-i18n="mode.team"></button></div>
+        <div class="seg" id="shrink-seg"><button data-v="1" data-i18n="shrink.on"></button><button data-v="0" data-i18n="shrink.off"></button></div>
+      </div>
+    </div>
+    <div class="room-bottom">
+      <div class="room-hint" id="room-hint"></div>
+      <div class="room-buttons">
+        <button class="btn btn-blue btn-big" id="btn-add-bot"><i data-icon="bot"></i><span data-i18n="room.addAi"></span></button>
+        <button class="btn btn-green btn-huge" id="btn-ready" data-i18n="room.ready"></button>
+        <button class="btn btn-yellow btn-huge" id="btn-start"><i data-icon="play"></i><span data-i18n="room.start"></span></button>
+      </div>
+    </div>
+    <div class="chat-float">
+      <div class="chat-log scroll" id="room-chat"></div>
+      <form class="chat-form" data-scope="room"><input class="game-input" maxlength="120" data-i18n-ph="chat.roomPlaceholder" /><button class="btn btn-blue btn-small" data-i18n="chat.send"></button></form>
+    </div>
+  </section>
+
+  <!-- ========== 游戏 ========== -->
+  <section id="screen-game" class="screen hidden">
+    <div id="game-view"></div>
+    <div id="hit-flash"></div>
+    <div class="hud-top">
+      <div class="map-tag" id="hud-map"></div>
+      <div class="timer-badge" id="hud-timer-wrap"><span id="hud-timer">3:00</span></div>
+      <div class="hud-right">
+<div class="ping-badge"><i class="bars"><b></b><b></b><b></b><b></b></i><span>--</span><small>ms</small></div>
+        <span class="net" id="hud-net"></span>
+        <button class="btn btn-icon sound-btn"><i data-icon="gear"></i></button>
+        <button class="btn btn-icon fs-btn"><i data-icon="expand"></i></button>
+        <button class="btn btn-icon btn-red-icon" id="btn-quit"><i data-icon="close"></i></button>
+      </div>
+    </div>
+    <div class="hud-left"><div class="hud-players" id="hud-players"></div><div class="item-tips" id="item-tips"></div></div>
+    <div class="killfeed" id="killfeed"></div>
+    <div class="pickup-pop" id="pickup-pop"></div>
+    <div class="hud-center" id="hud-center"></div>
+    <div class="hud-broadcast" id="hud-broadcast"></div>
+    <div class="hud-banner hidden" id="hud-banner"><b>WARNING</b><span data-i18n="hud.sdBanner"></span></div>
+    <div class="spectate hidden" id="spectate"><i data-icon="eye"></i><span data-i18n="hud.spectate"></span></div>
+    <div class="hud-chat" id="game-chat"></div>
+    <div class="touch-controls" id="touch">
+      <div class="dpad">
+        <button data-d="up">▲</button><button data-d="left">◀</button><button data-d="right">▶</button><button data-d="down">▼</button>
+      </div>
+      <button class="touch-bomb" id="touch-bomb"><i data-icon="bomb"></i></button>
+    </div>
+    <div class="result hidden" id="result-modal">
+      <div class="rays"></div>
+      <div class="result-inner">
+        <div class="result-title" id="result-title"></div>
+        <div class="stars" id="result-stars"></div>
+        <div id="result-reward" class="reward hidden"></div>
+        <ol id="result-list" class="result-list"></ol>
+        <button class="btn btn-yellow btn-huge" id="btn-back-room" data-i18n="common.continue"></button>
+      </div>
+      <div id="confetti"></div>
+    </div>
+  </section>
+
+  <!-- ========== 弹窗 ========== -->
+  <div class="modal hidden" id="id-modal">
+    <div class="dialog">
+      <div class="panel-head"><span id="id-title"></span><small>PLAYER ID</small></div>
+      <canvas id="id-avatar" width="160" height="160"></canvas>
+      <div id="id-name" class="id-name"></div>
+      <div class="id-label" data-i18n="id.label"></div>
+      <div class="id-big" id="id-value"></div>
+      <p class="hint" id="id-tip"></p>
+      <div class="dialog-actions">
+        <button class="btn btn-blue" id="btn-copy-id"><i data-icon="copy"></i><span data-i18n="common.copy"></span></button>
+        <button class="btn btn-yellow btn-big" id="btn-id-ok" data-i18n="id.enter"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="create-modal">
+    <div class="dialog wide">
+      <button class="close-x" data-close><i data-icon="close"></i></button>
+      <div class="panel-head"><span data-i18n="create.title"></span><small>CUSTOM ROOM</small></div>
+      <div class="create-row">
+        <input id="create-name" class="game-input" maxlength="16" data-i18n-ph="create.namePlaceholder" spellcheck="false" />
+        <div class="pw-input"><i data-icon="lock"></i><input id="create-password" class="game-input" maxlength="6" data-i18n-ph="room.pwPlaceholder" autocomplete="off" spellcheck="false" /></div>
+      </div>
+      <div id="create-maps" class="map-picker"></div>
+      <div class="seg-row">
+        <div class="seg" id="create-mode"><button data-v="ffa" class="on" data-i18n="mode.ffa"></button><button data-v="team" data-i18n="mode.team"></button></div>
+        <div class="seg" id="create-shrink"><button data-v="1" class="on" data-i18n="shrink.on"></button><button data-v="0" data-i18n="shrink.off"></button></div>
+      </div>
+      <p class="hint" data-i18n="create.hint"></p>
+      <div class="dialog-actions">
+        <button class="btn btn-gray" data-close data-i18n="common.cancel"></button>
+        <button class="btn btn-yellow btn-big" id="btn-create-ok" data-i18n="create.ok"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="shop-modal">
+    <div class="dialog shop-dialog">
+      <button class="close-x" data-close><i data-icon="close"></i></button>
+      <div class="panel-head"><span data-i18n="shop.title"></span><small>COSMETICS</small></div>
+      <div class="shop-top"><div class="shop-wallet"><i data-icon="gem"></i><b id="shop-points">0</b><small data-i18n="shop.points"></small></div><span id="shop-level"></span></div>
+      <p class="hint" data-i18n="shop.hint"></p>
+      <div id="shop-list" class="shop-list"></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="profile-modal">
+    <div class="dialog">
+      <button class="close-x" data-close><i data-icon="close"></i></button>
+      <div class="panel-head"><span data-i18n="profile.title"></span><small>LOADOUT</small></div>
+      <canvas id="profile-avatar" width="160" height="160"></canvas>
+      <div class="name-row">
+        <input id="profile-name" class="game-input" maxlength="8" spellcheck="false" readonly />
+        <button type="button" class="btn btn-blue" id="btn-rename"><i data-icon="card"></i><span id="rename-label"></span><small id="rename-count"></small></button>
+      </div>
+      <p class="hint sm" id="rename-hint"></p>
+      <div class="label sm" data-i18n="common.color"></div>
+      <div id="profile-skins" class="swatches"></div>
+      <div class="label sm"><span data-i18n="common.hat"></span><button type="button" class="link-btn" id="btn-profile-shop"><i data-icon="gem"></i><span data-i18n="shop.moreInShop"></span></button></div>
+      <div id="profile-hats" class="chips"></div>
+      <div class="dialog-actions">
+        <button class="btn btn-gray" data-close data-i18n="common.cancel"></button>
+        <button class="btn btn-yellow btn-big" id="btn-profile-ok" data-i18n="common.save"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="sound-modal">
+    <div class="dialog">
+      <button class="close-x" data-close><i data-icon="close"></i></button>
+      <div class="panel-head"><span data-i18n="settings.title"></span><small>SETTINGS</small></div>
+      <div class="slider-row lang-row"><span data-i18n="lang.label"></span><div class="lang-seg"><button data-lang="zh">简体中文</button><button data-lang="zh-HK">繁體中文</button><button data-lang="ja">日本語</button><button data-lang="en">English</button></div></div>
+      <div class="slider-row"><span data-i18n="settings.music"></span><input type="range" class="game-range" id="vol-music" min="0" max="1" step="0.05" /></div>
+      <div class="slider-row"><span data-i18n="settings.sfx"></span><input type="range" class="game-range" id="vol-sfx" min="0" max="1" step="0.05" /></div>
+      <p class="hint" id="track-name"></p>
+      <div class="dialog-actions"><button class="btn btn-yellow btn-big" data-close data-i18n="common.ok"></button></div>
+    </div>
+  </div>
+
+  <!-- 断线重连 -->
+  <div class="reconnect hidden" id="reconnect"><div class="box"><div class="spinner"></div><b id="reconnect-text"></b></div></div>
+
+  <div class="modal hidden" id="pw-modal">
+    <div class="dialog">
+      <button class="close-x" data-close><i data-icon="close"></i></button>
+      <div class="panel-head"><span data-i18n="room.pwTitle"></span><small>PASSWORD</small></div>
+      <div class="pw-input big"><i data-icon="lock"></i><input id="join-password" class="game-input" maxlength="6" data-i18n-ph="room.pwEnter" autocomplete="off" spellcheck="false" /></div>
+      <div class="dialog-actions">
+        <button class="btn btn-gray" data-close data-i18n="common.cancel"></button>
+        <button class="btn btn-yellow btn-big" id="btn-join-pw" data-i18n="rooms.join"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="history-modal">
+    <div class="dialog history-dialog">
+      <button class="close-x" data-close><i data-icon="close"></i></button>
+      <div class="panel-head"><span data-i18n="history.title"></span><small>MATCH HISTORY</small></div>
+      <div id="history-list" class="history-list"></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="confirm-modal">
+    <div class="dialog">
+      <div class="panel-head red"><span id="confirm-title"></span><small>CONFIRM</small></div>
+      <p class="confirm-text" id="confirm-text"></p>
+      <div class="dialog-actions">
+        <button class="btn btn-gray btn-big" id="confirm-no"></button>
+        <button class="btn btn-red btn-big" id="confirm-yes"></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+  <div id="fx-layer"></div>
+  <div id="transition"></div>
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

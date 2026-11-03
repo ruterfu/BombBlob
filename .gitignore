@@ -1,0 +1,8 @@
+__pycache__/
+.DS_Store
+.env
+.pgdata/
+.venv/
+*.pyc
+data/*.json
+data/*.tmp

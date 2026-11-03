@@ -1,0 +1,1504 @@
+import { audio, TRACKS } from './audio.js';
+import { Connection, guestLogin, idLogin, savedToken, forgetToken, fetchLoginConfig, oauthExchange, TokenInvalidError, UnknownIdError, ApiError } from './net.js';
+import { SKINS, HATS, BASE_HATS, TEAM_COLORS, POWERUPS, powerSize, drawAvatar, drawMapPreview } from './themes.js';
+import { t, getLang, setLang, onLangChange, applyI18n, displayName, mapText, normalizeLang } from './i18n.js';
+import { MenuStage } from './stage.js';
+import { icon, hydrateIcons, drawIcon } from './icons.js';
+import { setLevelTable, levelOf, levelFloor, levelCeil, levelProgress, tierOf, hatUnlocked, HAT_UNLOCK, levelBadge, setShop, shopItems, shopItem } from './levels.js';
+
+const MAX_PLAYERS = 6;
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+const state = {
+  user: null,
+  conn: null,
+  maps: [],
+  lobby: { rooms: [], online: 0 },
+  room: null,
+  game: null,
+  last: null,
+  screen: null,
+  resultShown: false,
+};
+let scene = null;
+let stage = null;
+
+// ================= 通用：转场 / 提示 / 特效 =================
+let transitioning = null;
+function show(screen, instant = false) {
+  if (state.screen === screen) return;
+  const apply = () => {
+    state.screen = screen;
+    for (const s of ['login', 'create', 'lobby', 'room', 'game']) $('#screen-' + s).classList.toggle('hidden', s !== screen);
+    if (screen === 'game') stage?.stop();
+    else {
+      stage?.start();
+      audio.play('lobby');
+    }
+    if (screen === 'login') stage?.showLogin(loginSkin, 0);
+    if (screen === 'create') stage?.showLogin(charSel?.skin ?? 0, charSel?.hat ?? 0);
+    if (screen === 'lobby' && state.user) stage?.showLobby(state.user);
+    if (screen === 'room' && state.room) stage?.showRoom(localizedRoom(state.room), state.user.id);
+  };
+  if (instant || !state.screen) return apply();
+  // 圆形遮罩转场
+  const tr = $('#transition');
+  clearTimeout(transitioning);
+  tr.className = 'in';
+  audio.fx('whoosh');
+  transitioning = setTimeout(() => {
+    apply();
+    tr.className = 'out';
+    transitioning = setTimeout(() => (tr.className = ''), 400);
+  }, 300);
+}
+
+function toast(msg, err = false) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (err ? ' err' : '');
+  el.textContent = msg;
+  $('#toasts').appendChild(el);
+  while ($('#toasts').children.length > 4) $('#toasts').firstChild.remove();
+  setTimeout(() => el.classList.add('out'), 2800);
+  setTimeout(() => el.remove(), 3100);
+}
+
+/** 有 GitHub 头像时显示头像图片（右下角叠一个小角色标识颜色），否则画角色头像 */
+function avatarEl(person, size = 64, opts) {
+  if (!person.avatar) return avatarCanvas(person.skin, person.hat, size, opts);
+  const box = document.createElement('span');
+  box.className = 'gh-avatar' + (opts?.dead ? ' dead' : '');
+  box.style.setProperty('--sz', size * 2 + 'px');
+  box.style.setProperty('--skin', (SKINS[person.skin] || SKINS[0]).color);
+  const img = document.createElement('img');
+  img.src = person.avatar;
+  img.alt = '';
+  img.referrerPolicy = 'no-referrer';
+  img.loading = 'lazy';
+  img.onerror = () => box.replaceWith(avatarCanvas(person.skin, person.hat, size, opts)); // 加载失败退回角色头像
+  box.appendChild(img);
+  return box;
+}
+
+function avatarCanvas(skin, hat, size = 64, opts) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size * 2;
+  drawAvatar(c.getContext('2d'), size, size * 1.05, size * 0.72, skin, hat, opts);
+  return c;
+}
+
+function openModal(id) { $(id).classList.remove('hidden'); audio.fx('whoosh', { vol: 0.5 }); }
+function closeModals() { $$('.modal').forEach((m) => m.classList.add('hidden')); }
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-close]')) closeModals();
+  else if (e.target.classList.contains('modal') && e.target.id !== 'id-modal' && e.target.id !== 'confirm-modal') closeModals();
+});
+
+/** 游戏风格的确认框（替代浏览器 confirm） */
+function confirmDialog(text, { title = t('confirm.title'), yes = t('confirm.yes'), no = t('confirm.no') } = {}) {
+  return new Promise((resolve) => {
+    $('#confirm-title').textContent = title;
+    $('#confirm-text').textContent = text;
+    $('#confirm-yes').textContent = yes;
+    $('#confirm-no').textContent = no;
+    openModal('#confirm-modal');
+    const done = (v) => {
+      $('#confirm-modal').classList.add('hidden');
+      resolve(v);
+    };
+    $('#confirm-yes').onclick = () => done(true);
+    $('#confirm-no').onclick = () => done(false);
+  });
+}
+
+// 按钮：悬停音效 + 点击星星特效
+const CLICKABLE = '.btn, .tab, .map-card:not(.locked), .room-row, .swatches button, .chips button, .seg:not(.locked) button, .close-x, .member-row.can, .mini';
+let lastHover = null;
+document.addEventListener('pointerover', (e) => {
+  const el = e.target.closest(CLICKABLE);
+  if (el && el !== lastHover && !el.disabled) audio.fx('hover');
+  lastHover = el;
+});
+document.addEventListener('pointerdown', (e) => {
+  const el = e.target.closest(CLICKABLE);
+  if (!el || el.disabled) return;
+  audio.fx('click');
+  sparkBurst(e.clientX, e.clientY);
+});
+function sparkBurst(x, y, n = 6, colors = ['#ffb547', '#ffd27a', '#36d6ff']) {
+  const layer = $('#fx-layer');
+  const ring = document.createElement('i');
+  ring.className = 'ring';
+  ring.style.left = x + 'px';
+  ring.style.top = y + 'px';
+  layer.appendChild(ring);
+  setTimeout(() => ring.remove(), 500);
+  for (let k = 0; k < n; k++) {
+    const s = document.createElement('i');
+    s.className = 'spark';
+    const a = (k / n) * Math.PI * 2 + Math.random() * 0.5;
+    const d = 22 + Math.random() * 26;
+    s.style.left = x + 'px';
+    s.style.top = y + 'px';
+    s.style.background = colors[k % colors.length];
+    s.style.setProperty('--dx', Math.cos(a) * d + 'px');
+    s.style.setProperty('--dy', Math.sin(a) * d + 'px');
+    layer.appendChild(s);
+    setTimeout(() => s.remove(), 650);
+  }
+}
+document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input')) e.preventDefault(); });
+document.addEventListener('dragstart', (e) => e.preventDefault());
+
+// ================= 形象选择器 =================
+function avatarPicker({ canvas, skins, hats, name }, initial, onChange, level = 1, items = []) {
+  const ok = (h) => hatUnlocked(h, level, items);
+  const sel = { skin: initial.skin ?? Math.floor(Math.random() * SKINS.length), hat: ok(initial.hat ?? 0) ? initial.hat ?? 0 : 0 };
+  const ids = [...Array(BASE_HATS).keys(), ...items.filter((i) => shopItem(i)).sort((a, b) => a - b)];
+  const redraw = () => {
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawAvatar(ctx, canvas.width / 2, canvas.height * 0.58, canvas.width * 0.3, sel.skin, sel.hat);
+    }
+    skins.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === sel.skin));
+    hats.querySelectorAll('button').forEach((b) => b.classList.toggle('on', +b.dataset.h === sel.hat));
+    onChange?.(sel);
+  };
+  skins.innerHTML = SKINS.map((s, i) => `<button type="button" title="${t('skin.' + i)}" style="background:${s.color}"></button>`).join('');
+  hats.innerHTML = ids.map((i) => ok(i)
+    ? `<button type="button" data-h="${i}"${shopItem(i) ? ' class="shop"' : ''}>${t('hat.' + i)}</button>`
+    : `<button type="button" data-h="${i}" class="locked" title="${t('lv.locked', { lv: HAT_UNLOCK[i] })}">${icon('lock')}<span>${t('hat.' + i)}</span><small>${t('lv.locked', { lv: HAT_UNLOCK[i] })}</small></button>`).join('');
+  skins.querySelectorAll('button').forEach((b, i) => (b.onclick = () => { sel.skin = i; redraw(); }));
+  hats.querySelectorAll('button').forEach((b) => (b.onclick = () => {
+    const h = +b.dataset.h;
+    if (!ok(h)) { shake(b); toast(t('lv.locked', { lv: HAT_UNLOCK[h] }), true); return; }
+    sel.hat = h; redraw();
+  }));
+  if (name) name.value = initial.name || '';
+  redraw();
+  return sel;
+}
+
+// ================= 更名（在装扮里，需要消耗 1 张更名卡） =================
+let renaming = false;
+function renameMode(on) {
+  renaming = on;
+  const input = $('#profile-name');
+  const cards = state.user?.renameCards ?? 0;
+  input.readOnly = !on;
+  input.classList.toggle('editing', on);
+  if (!on) input.value = state.user?.name || '';
+  $('#rename-label').textContent = t(on ? 'rename.confirmBtn' : 'rename.btn');
+  $('#rename-count').textContent = on ? '' : `×${cards}`;
+  $('#rename-hint').textContent = on ? t('rename.editing') : cards > 0 ? t('rename.has', { n: cards }) : t('rename.none');
+  if (on) { input.focus(); input.select(); }
+}
+$('#btn-rename').onclick = async () => {
+  const u = state.user;
+  if (!u) return;
+  if (!renaming) {
+    if ((u.renameCards ?? 0) <= 0) {
+      if (await confirmDialog(t('rename.noCard', { price: state.renameCardPrice ?? 100 }), { title: t('rename.title'), yes: t('rename.toShop') })) {
+        $('#profile-modal').classList.add('hidden');
+        openShop();
+      }
+      return;
+    }
+    renameMode(true);
+    return;
+  }
+  const name = $('#profile-name').value.trim();
+  if (name === u.name) { renameMode(false); return; }
+  const err = nameError(name);
+  if (err) { shake($('#profile-name')); toast(t('err.' + err), true); return; }
+  if (await confirmDialog(t('rename.confirm', { name, n: u.renameCards }), { title: t('rename.title') })) send({ t: 'rename', name });
+};
+$('#profile-name').addEventListener('keydown', (e) => {
+  if (!renaming) return;
+  if (e.key === 'Enter') $('#btn-rename').click();
+  if (e.key === 'Escape') { e.stopPropagation(); renameMode(false); }
+});
+
+// ================= 装饰商店 =================
+function renderShop() {
+  const u = state.user;
+  if (!u) return;
+  $('#shop-points').textContent = u.points ?? 0;
+  $('#shop-level').innerHTML = levelBadge(u.level);
+  const list = $('#shop-list');
+  list.innerHTML = '';
+  // 道具：更名卡（可叠加购买）
+  const price = state.renameCardPrice ?? 100;
+  const tools = document.createElement('div');
+  tools.className = 'shop-tier';
+  tools.innerHTML = `<div class="shop-tier-head" style="--tc:#36d6ff">${icon('card')}<span>${t('shop.items')}</span></div>`;
+  const card = document.createElement('div');
+  card.className = 'shop-card tool';
+  const short = Math.max(0, price - (u.points || 0));
+  card.innerHTML = `<div class="tool-ic">${icon('card')}</div><div class="nm">${t('item.rename')}</div>
+    <p class="desc">${t('item.renameDesc')}</p>
+    <div class="pr">${icon('gem')}${t('shop.price', { n: price })}<span class="own">${t('shop.ownedCount', { n: u.renameCards ?? 0 })}</span></div>
+    ${short > 0 ? `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>` : `<button class="btn btn-yellow" data-act="buy">${t('shop.buy')}</button>`}`;
+  card.querySelector('[data-act="buy"]')?.addEventListener('click', async () => {
+    if (await confirmDialog(t('shop.confirm', { price, name: t('item.rename') }), { title: t('shop.title') })) send({ t: 'buy', item: 'rename' });
+  });
+  const row0 = document.createElement('div');
+  row0.className = 'shop-row';
+  row0.appendChild(card);
+  tools.appendChild(row0);
+  list.appendChild(tools);
+  const groups = new Map();
+  for (const it of shopItems()) (groups.get(it.level) || groups.set(it.level, []).get(it.level)).push(it);
+  for (const [lv, items] of groups) {
+    const unlocked = u.level >= lv;
+    const sec = document.createElement('div');
+    sec.className = 'shop-tier' + (unlocked ? '' : ' locked');
+    sec.innerHTML = `<div class="shop-tier-head" style="--tc:${tierOf(lv).color}">${unlocked ? '' : icon('lock')}${levelBadge(lv)}<span>${t('shop.tier', { lv })}</span></div>`;
+    const row = document.createElement('div');
+    row.className = 'shop-row';
+    for (const it of items) {
+      const owned = (u.items || []).includes(it.id);
+      const equipped = u.hat === it.id;
+      const card = document.createElement('div');
+      card.className = 'shop-card' + (owned ? ' owned' : '') + (equipped ? ' equipped' : '');
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 150;
+      const ctx = cv.getContext('2d');
+      drawAvatar(ctx, 75, 92, 40, u.skin, it.id);
+      card.appendChild(cv);
+      const short = Math.max(0, it.price - (u.points || 0));
+      let action;
+      if (equipped) action = `<button class="btn btn-gray" disabled>${icon('check')}${t('shop.equipped')}</button>`;
+      else if (owned) action = `<button class="btn btn-blue" data-act="equip">${t('shop.equip')}</button>`;
+      else if (!unlocked) action = `<button class="btn btn-gray" disabled>${icon('lock')}${t('shop.need', { lv })}</button>`;
+      else if (short > 0) action = `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>`;
+      else action = `<button class="btn btn-yellow" data-act="buy">${t('shop.buy')}</button>`;
+      card.insertAdjacentHTML('beforeend', `<div class="nm">${esc(t('hat.' + it.id))}</div>
+        <div class="pr">${owned ? `<span class="own">${t('shop.owned')}</span>` : `${icon('gem')}${t('shop.price', { n: it.price })}`}</div>${action}`);
+      card.querySelector('[data-act="buy"]')?.addEventListener('click', async () => {
+        const name = t('hat.' + it.id);
+        if (await confirmDialog(t('shop.confirm', { price: it.price, name }), { title: t('shop.title') })) send({ t: 'buy', item: it.id });
+      });
+      card.querySelector('[data-act="equip"]')?.addEventListener('click', () => send({ t: 'profile', hat: it.id }));
+      row.appendChild(card);
+    }
+    sec.appendChild(row);
+    list.appendChild(sec);
+  }
+}
+function openShop() {
+  renderShop();
+  openModal('#shop-modal');
+}
+$('#points-pill').onclick = openShop;
+$('#btn-profile-shop').onclick = () => { $('#profile-modal').classList.add('hidden'); openShop(); };
+
+// ================= 启动 / 登录 =================
+const loginSkin = Math.floor(Math.random() * SKINS.length); // 登录页展示用的角色颜色
+let charSel = null;
+
+// ================= 创建角色（新账号首次登录） =================
+function openCreateCharacter() {
+  const u = state.user;
+  charSel = avatarPicker(
+    { skins: $('#char-skins'), hats: $('#char-hats'), name: $('#char-name') },
+    { name: '', skin: u.skin, hat: 0 },
+    (sel) => { if (state.screen === 'create') stage?.showLogin(sel.skin, sel.hat); },
+    u.level ?? 1,
+    u.items || [],
+  );
+  show('create');
+  setTimeout(() => $('#char-name').focus(), 450);
+}
+/** 名字：trim 后长度必须大于 0；只允许文字 / 字母 / 数字 / 空格，最多 8 个字（最终以服务器校验为准） */
+const NAME_OK = /^[\p{L}\p{N} ]+$/u;
+function nameError(raw) {
+  const name = raw.trim();
+  if (name.length === 0) return 'name_invalid';
+  if ([...name].length > 8) return 'name_too_long';
+  if (!NAME_OK.test(name)) return 'name_chars';
+  return null;
+}
+$('#btn-create-char').onclick = () => {
+  const name = $('#char-name').value.trim();
+  const err = nameError(name);
+  if (err) { shake($('#char-name')); toast(t('err.' + err), true); return; }
+  send({ t: 'createCharacter', name, skin: charSel.skin, hat: charSel.hat });
+};
+$('#char-name').addEventListener('keydown', (e) => e.key === 'Enter' && $('#btn-create-char').click());
+
+/** 登录成功（收到 welcome）后：没有角色 → 创建角色；否则 → 大厅 */
+function enterAfterLogin() {
+  if (!state.user.hasCharacter) {
+    if (state.screen !== 'create') openCreateCharacter();
+  } else if (state.screen === 'login' || state.screen === 'create') {
+    show('lobby');
+  }
+}
+
+async function boot() {
+  hydrateIcons();
+  try {
+    stage = new MenuStage($('#stage'));
+  } catch (e) {
+    console.warn('3D 舞台初始化失败', e);
+  }
+  $('#btn-guest').onclick = () => {
+    audio.unlock();
+    // 有本地 token 时恢复原账号，否则新建游客账号（之后进入创建角色流程）
+    const token = savedToken();
+    doLogin(() => guestLogin({ token: token || undefined, lang: getLang() }));
+  };
+  $('#btn-id-toggle').onclick = () => {
+    const row = $('#id-row');
+    row.classList.toggle('hidden');
+    if (!row.classList.contains('hidden')) $('#login-id').focus();
+  };
+  $('#btn-id-login').onclick = () => {
+    audio.unlock();
+    const id = $('#login-id').value.trim();
+    if (!/^\d{8}$/.test(id)) {
+      toast(t('id.badDigits'), true);
+      shake($('#login-id'));
+      return;
+    }
+    doLogin(() => idLogin(id, getLang()));
+  };
+  $('#login-id').addEventListener('input', (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 8); });
+  $('#login-id').addEventListener('keydown', (e) => e.key === 'Enter' && $('#btn-id-login').click());
+  document.addEventListener('pointerdown', () => audio.unlock(), { once: true });
+  document.addEventListener('keydown', () => audio.unlock(), { once: true });
+
+  // 登录方式由服务器配置决定（LOGIN_GUEST / LOGIN_GITHUB）
+  let cfg = { guest: true, github: false };
+  try { cfg = await fetchLoginConfig(); } catch { /* 默认游客 */ }
+  state.loginCfg = cfg;
+  $('#github-block').classList.toggle('hidden', !cfg.github);
+  $('#guest-block').classList.toggle('hidden', !cfg.guest);
+  $('#login-split').classList.toggle('hidden', !(cfg.guest && cfg.github));
+  $('#btn-github').onclick = () => { audio.unlock(); location.href = '/auth/github?lang=' + encodeURIComponent(getLang()); };
+
+  // GitHub 回跳：#oauth=<一次性交换码> 或 #oauth_error=<原因>
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const oauthCode = hash.get('oauth');
+  const oauthErr = hash.get('oauth_error');
+  if (oauthCode || oauthErr) history.replaceState(null, '', location.pathname);
+
+  const token = savedToken();
+  if (token || oauthCode) {
+    $('#login-loading').classList.remove('hidden');
+    $('#login-form').classList.add('hidden');
+  }
+  show('login', true);
+  setTimeout(() => $('#boot').classList.add('done'), 900);
+  setTimeout(() => $('#boot').remove(), 1500);
+  if (oauthErr) {
+    const n = $('#login-notice');
+    n.classList.remove('hidden');
+    n.textContent = t('oauth.' + (['denied', 'state', 'disabled'].includes(oauthErr) ? oauthErr : 'github'));
+  }
+  if (oauthCode) await doLogin(() => oauthExchange(oauthCode), true);
+  else if (token) await doLogin(() => guestLogin({ token, lang: getLang() }), true);
+}
+
+function shake(el) {
+  el.classList.remove('shake');
+  void el.offsetWidth;
+  el.classList.add('shake');
+}
+
+/** 错误码 → 当前语言的提示 */
+function errText(e) {
+  const code = e instanceof ApiError ? e.code : e?.code || 'unknown';
+  const key = 'err.' + code;
+  const s = t(key, e?.params);
+  return s === key ? t('err.unknown') : s;
+}
+
+async function doLogin(fn, auto = false) {
+  const btns = [$('#btn-guest'), $('#btn-id-login')];
+  btns.forEach((b) => (b.disabled = true));
+  try {
+    const data = await fn();
+    state.user = data.user;
+    adoptAccountLang(data.user);
+    showIdModal(data.user, data.created);
+    startConnection(data);
+  } catch (e) {
+    $('#login-loading').classList.add('hidden');
+    $('#login-form').classList.remove('hidden');
+    let text = errText(e);
+    if (e instanceof TokenInvalidError) text = t(state.loginCfg?.guest ? 'err.token_invalid.guest' : 'err.token_invalid.github');
+    if (e instanceof UnknownIdError) shake($('#login-id'));
+    const n = $('#login-notice');
+    n.classList.remove('hidden');
+    n.textContent = text;
+    if (!auto) toast(text, true);
+  } finally {
+    btns.forEach((b) => (b.disabled = false));
+  }
+}
+
+function showIdModal(user, created) {
+  $('#id-title').textContent = t(created ? 'id.created' : 'id.welcome');
+  $('#id-name').textContent = `${user.name} · LV.${user.level}` + (user.provider === 'github' ? '  ·  GitHub' : '');
+  $('#id-value').textContent = user.id;
+  $('#id-tip').textContent = t(user.provider === 'github' ? 'id.tipGithub' : created ? 'id.tipCreated' : 'id.tipBack');
+  const cv = $('#id-avatar');
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  drawAvatar(ctx, cv.width / 2, cv.height * 0.55, cv.width * 0.32, user.skin, user.hat);
+  openModal('#id-modal');
+  audio.fx(created ? 'win' : 'coin');
+}
+$('#btn-id-ok').onclick = () => $('#id-modal').classList.add('hidden');
+$('#btn-copy-id').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($('#id-value').textContent);
+    toast(t('id.copied'));
+  } catch {
+    toast(t('id.copyFail'), true);
+  }
+};
+
+/** 重连状态：显示遮罩并冻结本地操作；重连成功后一切以服务器下发的状态为准 */
+function setReconnecting(on, attempt = 0) {
+  state.reconnecting = on;
+  const el = $('#reconnect');
+  el.classList.toggle('hidden', !on);
+  if (on) $('#reconnect-text').textContent = t('conn.reconnecting', { n: attempt + 1 });
+  if (on) input.reset();
+  if (scene) scene.frozen = on;
+}
+
+function startConnection(login) {
+  state.conn?.close();
+  state.conn = new Connection(login, {
+    open: () => {
+      setReconnecting(false);
+      if (state.pendingLang) {
+        send({ t: 'profile', lang: state.pendingLang });
+        state.pendingLang = null;
+      }
+    },
+    message: onMessage,
+    close: (code, attempt) => {
+      if (code === 4001) {
+        setReconnecting(false);
+        toast(t('conn.expired'), true);
+        show('login');
+      } else if (code === 4000) {
+        setReconnecting(false);
+        toast(t('conn.replaced'), true);
+      } else if (state.screen !== 'login') {
+        setReconnecting(true, attempt);
+      }
+    },
+  });
+}
+
+const send = (msg) => state.conn?.send(msg);
+
+// ================= 消息 =================
+function onMessage(m) {
+  switch (m.t) {
+    case 'welcome':
+      state.user = m.user;
+      adoptAccountLang(m.user);
+      state.maps = m.maps;
+      setLevelTable(m.levels);
+      setShop(m.shop);
+      state.renameCardPrice = m.renameCardPrice;
+      renderMe();
+      if (!m.roomId) {
+        // 服务器说我们不在任何房间（例如断线期间对局已结束）：以服务器为准离开房间 / 对局界面
+        state.room = null;
+        state.inRoom = false;
+        if (state.screen === 'room' || state.screen === 'game') { state.game = null; show('lobby'); }
+      }
+      if (!m.roomId || !m.user.hasCharacter) enterAfterLogin();
+      else if (!m.inGame && (state.screen === 'login' || state.screen === 'create')) show('room');
+      loadLeaderboard();
+      break;
+    case 'me':
+      if (state.screen === 'create' && m.user.hasCharacter) {
+        state.user = m.user;
+        renderMe();
+        audio.fx('win');
+        toast(t('char.done', { name: m.user.name }));
+        show('lobby');
+        break;
+      }
+      state.user = m.user;
+      renderMe();
+      if (!$('#shop-modal').classList.contains('hidden')) renderShop();
+      if (!$('#profile-modal').classList.contains('hidden')) renameMode(false);
+      break;
+    case 'bought':
+      audio.fx('coin');
+      toast(m.item === 'rename' ? t('shop.boughtCard') : t('shop.bought', { name: t('hat.' + m.item) }));
+      break;
+    case 'leaderboard':
+      renderLeaderboard(m.list || []);
+      break;
+    case 'renamed':
+      audio.fx('coin');
+      toast(t('rename.done', { name: m.name }));
+      break;
+    case 'lobby':
+      state.lobby = m;
+      $('#online-pill b').textContent = m.online;
+      if (state.screen === 'room' || (state.screen === 'game' && !state.room)) show('lobby');
+      if (state.room && !state.inRoom) state.room = null;
+      renderRooms();
+      break;
+    case 'room':
+      $('#pw-modal').classList.add('hidden');
+      state.room = m.room;
+      state.inRoom = true;
+      // 对局进行中（重连 / 重新登录）：不切到房间界面，等服务器下发对局状态直接回到游戏
+      if (m.room.state !== 'playing' && (state.screen === 'lobby' || state.screen === 'login' || state.screen === 'create')) {
+        $('#room-chat').innerHTML = '';
+        show('room');
+      } else if (state.screen === 'game' && m.room.state === 'waiting' && !state.resultShown) {
+        // 断线期间对局已经结束：回到房间
+        state.game = null;
+        show('room');
+      }
+      renderRoom();
+      break;
+    case 'start':
+      startGame(m);
+      break;
+    case 's':
+      onSnapshot(m);
+      break;
+    case 'end':
+      showResult(m.result);
+      break;
+    case 'chat':
+      addChat(m);
+      break;
+    case 'chatlog':
+      $('#lobby-chat').innerHTML = '';
+      m.list.forEach(addChat);
+      break;
+    case 'kicked':
+      state.room = null;
+      state.inRoom = false;
+      toast(t('room.kicked'), true);
+      show('lobby');
+      break;
+    case 'error':
+      if (m.code === 'room_password') { askRoomPassword(m.params?.id); break; }
+      if (m.code === 'room_password_wrong') shake($('#join-password'));
+      toast(errText(m), true);
+      break;
+    case 'history':
+      renderHistory(m.list || []);
+      break;
+    case 'presence':
+      // 对局中有玩家断线 / 重连：全场广播
+      if (state.screen === 'game' && state.game && m.id !== state.user.id) {
+        const p = state.game.players.find((x) => x.id === m.id);
+        broadcastBanner(p || { name: m.name, skin: 0, hat: 0 }, m.on);
+        document.getElementById('hp-' + m.id)?.classList.toggle('offline', !m.on);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+// ================= 大厅 =================
+let lastCoins = null;
+function renderMe() {
+  const u = state.user;
+  if (!u) return;
+  const box = $('#lobby-me');
+  box.innerHTML = '';
+  box.appendChild(avatarEl(u, 31));
+  const pct = levelProgress(u.exp) * 100;
+  const tier = tierOf(u.level);
+  const lo = levelFloor(u.level), hi = levelCeil(u.level);
+  const expText = hi == null ? 'MAX' : t('lv.exp', { cur: u.exp - lo, need: hi - lo });
+  const info = document.createElement('div');
+  info.innerHTML = `<div class="nm">${esc(u.name)}${levelBadge(u.level)}<span class="tier" style="--tc:${tier.color}">${t('tier.' + tier.index)}</span></div>
+    <div class="expbar" style="--tc:${tier.color}" title="${hi == null ? '' : t('lv.toNext', { lv: u.level + 1, n: hi - u.exp })}"><i style="width:${pct}%"></i><em>${expText}</em></div>
+    <div class="uid">${u.provider === 'github' ? `${icon('github')} · ` : ''}ID ${esc(u.id)} · ${u.stats.wins}W / ${u.stats.games}G</div>`;
+  box.appendChild(info);
+  const pill = $('#points-pill');
+  pill.querySelector('b').textContent = u.points ?? 0;
+  if (lastCoins !== null && u.points > lastCoins) {
+    pill.classList.remove('bump'); void pill.offsetWidth; pill.classList.add('bump');
+    audio.fx('coin');
+  }
+  lastCoins = u.points;
+  if (state.screen === 'lobby') stage?.showLobby(u);
+}
+
+function mapName(id) {
+  if (id === 'random') return t('map.random');
+  return mapText(state.maps.find((m) => m.id === id), 'name') || id;
+}
+
+$$('#lobby-tabs .tab').forEach((t) => (t.onclick = () => {
+  $$('#lobby-tabs .tab').forEach((x) => x.classList.toggle('on', x === t));
+  $$('.lobby-panel .tab-body').forEach((b) => b.classList.toggle('hidden', b.dataset.tab !== t.dataset.tab));
+  if (t.dataset.tab === 'rank') loadLeaderboard();
+}));
+
+function renderRooms() {
+  const list = $('#room-list');
+  const rooms = state.lobby.rooms || [];
+  if (!rooms.length) {
+    list.innerHTML = `<div class="empty">${icon('map')}${t('rooms.empty')}</div>`;
+    return;
+  }
+  list.innerHTML = '';
+  rooms.forEach((r, i) => {
+    const row = document.createElement('div');
+    row.className = 'room-row';
+    row.style.animationDelay = i * 0.04 + 's';
+    const map = state.maps.find((m) => m.id === r.mapId);
+    const cv = document.createElement('canvas');
+    cv.width = 300; cv.height = 260;
+    if (map) drawMapPreview(cv, map);
+    else {
+      const c = cv.getContext('2d');
+      c.fillStyle = '#121722'; c.fillRect(0, 0, 300, 260);
+      drawIcon(c, 'dice', 150, 130, 110, '#8a93a8', 1.6);
+    }
+    row.appendChild(cv);
+    const full = r.players >= MAX_PLAYERS;
+    const mid = document.createElement('div');
+    mid.innerHTML = `<div class="name">${esc(r.name)}</div>
+      <div class="meta"><span class="tag ${r.state}">${r.state === 'playing' ? 'LIVE' : 'OPEN'}</span>
+      <span>${esc(mapName(r.mapId))}</span><span>${t(r.mode === 'team' ? 'mode.teamShort' : 'mode.ffaShort')}</span>
+      <span>${icon('users')} ${r.players}/${MAX_PLAYERS}</span></div>`;
+    row.appendChild(mid);
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-green btn-small';
+    btn.textContent = t(r.state === 'playing' ? 'rooms.playing' : full ? 'rooms.full' : 'rooms.join');
+    btn.disabled = r.state === 'playing' || full;
+    const join = () => { if (!btn.disabled) (r.locked ? askRoomPassword(r.id) : send({ t: 'joinRoom', id: r.id })); };
+    if (r.locked) mid.querySelector('.name').insertAdjacentHTML('afterbegin', `<span class="lock">${icon('lock')}</span>`);
+    btn.onclick = (e) => { e.stopPropagation(); join(); };
+    row.onclick = join;
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+// 排行榜也走加密的 WebSocket
+function loadLeaderboard() { send({ t: 'leaderboard' }); }
+function renderLeaderboard(list) {
+  {
+    const ol = $('#leaderboard');
+    ol.innerHTML = list.length ? '' : `<div class="empty">${icon('trophy')}${t('rank.empty')}</div>`;
+    list.forEach((u, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="rank">${i + 1}</span>`;
+      li.appendChild(avatarEl(u, 32));
+      li.insertAdjacentHTML('beforeend', `<span>${esc(u.name)}</span>${levelBadge(u.level)}<span class="score">${t('rank.score', { wins: u.stats.wins, kills: u.stats.kills })}</span>`);
+      ol.appendChild(li);
+    });
+  }
+}
+
+function mapPicker(root, selected, onPick, locked = false) {
+  root.innerHTML = '';
+  for (const id of [...state.maps.map((m) => m.id), 'random']) {
+    const card = document.createElement('div');
+    card.className = 'map-card' + (id === selected ? ' on' : '') + (locked ? ' locked' : '');
+    if (id === 'random') {
+      card.innerHTML = `<div class="rand">${icon('dice')}</div><div>${t('map.random')}</div>`;
+    } else {
+      const cv = document.createElement('canvas');
+      cv.width = 300; cv.height = 260;
+      drawMapPreview(cv, state.maps.find((m) => m.id === id));
+      card.appendChild(cv);
+      card.insertAdjacentHTML('beforeend', `<div>${esc(mapName(id))}</div>`);
+    }
+    if (!locked) card.onclick = () => onPick(id);
+    root.appendChild(card);
+  }
+  const desc = document.createElement('div');
+  desc.className = 'map-desc';
+  desc.style.gridColumn = '1 / -1';
+  const m = state.maps.find((x) => x.id === selected);
+  desc.textContent = m ? mapText(m, 'desc') : t('map.randomDesc');
+  root.appendChild(desc);
+}
+
+function segPicker(root, value, onPick, locked = false) {
+  root.classList.toggle('locked', locked);
+  root.querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.v === String(value));
+    b.onclick = locked ? null : () => onPick(b.dataset.v);
+  });
+}
+
+const createSel = { mapId: 'meadow', mode: 'ffa', shrink: true };
+function openCreate() {
+  $('#create-name').value = t('room.defaultName', { name: state.user.name });
+  $('#create-password').value = '';
+  const draw = () => {
+    mapPicker($('#create-maps'), createSel.mapId, (id) => { createSel.mapId = id; draw(); });
+    segPicker($('#create-mode'), createSel.mode, (v) => { createSel.mode = v; draw(); });
+    segPicker($('#create-shrink'), createSel.shrink ? '1' : '0', (v) => { createSel.shrink = v === '1'; draw(); });
+  };
+  draw();
+  openModal('#create-modal');
+}
+
+// ================= 房间 =================
+function renderRoom() {
+  const r = state.room;
+  if (!r) return;
+  const me = state.user.id;
+  const isHost = r.hostId === me;
+  const team = r.settings.mode === 'team';
+  const waiting = r.state === 'waiting';
+  $('#room-name').textContent = r.name;
+  $('#room-pw').classList.toggle('hidden', !r.password);
+  $('#room-pw').innerHTML = r.password ? `${icon('lock')}${esc(r.password)}` : '';
+  $('#room-id').textContent = '#' + r.id;
+  const humans = r.members.filter((m) => !m.isBot).length;
+  const bots = r.members.length - humans;
+  $('#room-count').textContent = `${r.members.length}/${MAX_PLAYERS}`;
+  if (state.screen === 'room') stage?.showRoom(localizedRoom(r), me);
+
+  const list = $('#slots');
+  list.innerHTML = '';
+  for (let i = 0; i < MAX_PLAYERS; i++) {
+    const m = r.members[i];
+    const el = document.createElement('div');
+    if (!m) {
+      const can = isHost && waiting && bots < r.botLimit;
+      el.className = 'member-row empty-slot' + (can ? ' can' : '');
+      el.innerHTML = can ? `${icon('plus')} ${t('room.addAi')}` : t('room.empty');
+      if (can) el.onclick = () => send({ t: 'addBot' });
+      list.appendChild(el);
+      continue;
+    }
+    el.className = `member-row${m.id === me ? ' me' : ''}${team ? ' team' + m.team : ''}`;
+    el.appendChild(avatarEl(m, 17));
+    const status = m.id === r.hostId ? `${icon('crown')}${t('room.host')}` : m.isBot ? `${icon('bot')}${t('room.bot')}` : m.ready ? `${icon('check')}${t('room.isReady')}` : t('room.notReady');
+    el.insertAdjacentHTML('beforeend', `<div class="nm">${esc(displayName(m.name, m.isBot))}${m.level ? levelBadge(m.level) : ''}<div class="st ${m.ready || m.isBot ? 'ready' : ''}">${status}${m.connected ? '' : ` · <span class="off">${t('room.offline')}</span>`}</div></div>`);
+    if (team) {
+      const canSwitch = waiting && (m.id === me || isHost);
+      const tb = document.createElement('button');
+      tb.className = 'mini';
+      tb.style.background = TEAM_COLORS[m.team];
+      tb.style.color = '#fff';
+      tb.textContent = t('team.' + m.team) + (canSwitch ? '⇄' : '');
+      tb.disabled = !canSwitch;
+      tb.onclick = () => send({ t: 'team', id: m.id, team: 1 - m.team });
+      el.appendChild(tb);
+    }
+    if (isHost && m.id !== me && waiting) {
+      const k = document.createElement('button');
+      k.className = 'mini kick';
+      k.innerHTML = icon('close');
+      k.title = t(m.isBot ? 'room.removeBot' : 'room.kick');
+      k.onclick = () => send({ t: 'kick', id: m.id });
+      el.appendChild(k);
+    }
+    list.appendChild(el);
+  }
+
+  $('#map-host-hint').textContent = t(isHost ? 'room.hostCanPick' : 'room.hostOnly');
+  mapPicker($('#map-picker'), r.settings.mapId, (id) => send({ t: 'settings', mapId: id }), !isHost || !waiting);
+  segPicker($('#mode-seg'), r.settings.mode, (v) => send({ t: 'settings', mode: v }), !isHost || !waiting);
+  segPicker($('#shrink-seg'), r.settings.shrink === false ? '0' : '1', (v) => send({ t: 'settings', shrink: v === '1' }), !isHost || !waiting);
+
+  const addBot = $('#btn-add-bot');
+  addBot.classList.toggle('hidden', !isHost);
+  addBot.disabled = !waiting || bots >= r.botLimit || r.members.length >= MAX_PLAYERS;
+  addBot.innerHTML = `${icon('bot')}${t('room.addAiCount', { n: bots, max: r.botLimit })}`;
+
+  const mine = r.members.find((m) => m.id === me);
+  const ready = $('#btn-ready');
+  ready.className = 'btn btn-huge ' + (mine?.ready ? 'btn-gray' : 'btn-green pulse');
+  ready.classList.toggle('hidden', isHost);
+  ready.innerHTML = mine?.ready ? t('room.unready') : `${icon('check')}${t('room.ready')}`;
+  const start = $('#btn-start');
+  const othersReady = r.members.every((m) => m.isBot || m.id === r.hostId || m.ready);
+  const canStart = waiting && r.members.length >= 2 && othersReady;
+  start.className = 'btn btn-yellow btn-huge' + (canStart ? ' pulse' : '');
+  start.classList.toggle('hidden', !isHost);
+  start.disabled = !waiting;
+  $('#room-hint').textContent = !waiting
+    ? t('room.inProgress')
+    : isHost
+      ? t(r.members.length < 2 ? 'room.needTwo' : othersReady ? 'room.allReady' : 'room.waitOthers')
+      : t(mine?.ready ? 'room.waitHost' : 'room.pleaseReady');
+}
+
+// ================= 聊天 =================
+/** 系统消息：服务器只发 key + 参数 */
+function sysText(m) {
+  if (m.key) return t('sys.' + m.key, { ...(m.params || {}), name: displayName(m.params?.name || '', false) });
+  return m.text || '';
+}
+
+function addChat(m) {
+  const target = m.scope === 'lobby' ? $('#lobby-chat') : $('#room-chat');
+  const line = document.createElement('div');
+  if (m.sys) {
+    line.className = 'sys';
+    line.textContent = sysText(m);
+  } else {
+    line.innerHTML = `<b style="color:${(SKINS[m.skin] || SKINS[0]).color}">${esc(m.from)}:</b>${esc(m.text)}`;
+  }
+  target.appendChild(line);
+  while (target.children.length > 100) target.firstChild.remove();
+  target.scrollTop = target.scrollHeight;
+  if (state.screen === 'game' && m.scope === 'room') {
+    const g = document.createElement('div');
+    g.textContent = m.sys ? sysText(m) : `${m.from}: ${m.text}`;
+    $('#game-chat').appendChild(g);
+    setTimeout(() => g.remove(), 8000);
+  }
+  if (!m.sys) audio.fx('chat');
+}
+$$('.chat-form').forEach((f) => {
+  f.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = f.querySelector('input');
+    const text = input.value.trim();
+    if (text) send({ t: 'chat', text });
+    input.value = '';
+  });
+});
+
+// ================= 游戏 =================
+async function ensureScene() {
+  if (scene) return scene;
+  const { GameScene } = await import('./scene.js');
+  scene = new GameScene($('#game-view'));
+  scene.onMove = (mv) => send({ t: 'mv', ...mv, q: nextSeq() });
+  if (new URLSearchParams(location.search).has('debug')) window.__scene = scene; // 调试用
+  return scene;
+}
+
+async function startGame(info) {
+  // 重连回到同一局：直接按服务器状态重建场景（不重播开场动画）
+  const rejoin = !!info.rejoin;
+  state.game = info;
+  state.last = null;
+  state.resultShown = false;
+  state.lastCd = null;
+  state.prevHearts = {};
+  net.pending.clear();
+  net.inputLat = 0;
+  net.samples = [];
+  net.lastAck = 0;
+  net.snapTimes = [];
+  $('#result-modal').classList.add('hidden');
+  $('#hud-banner').classList.add('hidden');
+  $('#spectate').classList.add('hidden');
+  $('#game-chat').innerHTML = '';
+  $('#killfeed').innerHTML = '';
+  $('#pickup-pop').innerHTML = '';
+  show('game');
+  const sc = await ensureScene();
+  sc.load({ ...info, players: info.players.map((p) => ({ ...p, name: displayName(p.name, p.isBot) })) }, state.user.id);
+  if (info.k) sc.rebuildBlocks(info.k); // 当前地图方块（重连时尤其重要）
+  if (rejoin) {
+    sc.introT = 1;
+    sc.forceSync = true;
+    sc.frozen = false;
+    toast(t('conn.rejoined'));
+  }
+  $('#hud-map').textContent = `${mapName(info.mapId)} · ${t(info.mode === 'team' ? 'mode.team' : 'mode.ffa')}`;
+  audio.play(TRACKS[info.theme] ? info.theme : 'meadow');
+  buildHudPlayers();
+  input.reset();
+}
+
+function buildHudPlayers() {
+  const root = $('#hud-players');
+  root.innerHTML = '';
+  state.game.players.forEach((p, i) => {
+    const el = document.createElement('div');
+    el.className = 'hp' + (p.id === state.user.id ? ' me' : '');
+    el.id = 'hp-' + p.id;
+    el.style.animationDelay = i * 0.06 + 's';
+    if (state.game.mode === 'team') el.style.borderColor = TEAM_COLORS[p.team];
+    el.appendChild(avatarEl(p, 22));
+    el.insertAdjacentHTML('beforeend', `<div><div class="n">${p.level ? levelBadge(p.level) : ''}${esc(displayName(p.name, p.isBot))}</div><div class="hearts"></div><div class="pw"></div></div>`);
+    root.appendChild(el);
+  });
+}
+
+function countdownText(text, cls = '') {
+  const center = $('#hud-center');
+  center.textContent = text;
+  center.className = 'hud-center ' + cls;
+  void center.offsetWidth;
+  center.classList.add('anim');
+}
+
+let hudTick = 0;
+function onSnapshot(s) {
+  if (!state.game || state.screen !== 'game') return;
+  state.last = s;
+  if (scene) scene.rtt = state.conn?.ping ?? 0;
+  scene?.pushState(s);
+  playEvents(s);
+  // 输入确认延迟：发送输入 → 服务器回传已处理该序号
+  const now = performance.now();
+  const meSnap = s.p.find((p) => p.id === state.user.id);
+  if (meSnap && meSnap.q > net.lastAck) {
+    const t0 = net.pending.get(meSnap.q);
+    if (t0 && s.ph === 'play') {
+      // 取最近 20 次输入确认延迟的中位数（避免开局加载卡顿造成的异常值）
+      net.samples.push(now - t0);
+      if (net.samples.length > 20) net.samples.shift();
+      const sorted = [...net.samples].sort((a, b) => a - b);
+      net.inputLat = sorted[Math.floor(sorted.length / 2)];
+    }
+    for (const k of net.pending.keys()) if (k <= meSnap.q) net.pending.delete(k);
+    net.lastAck = meSnap.q;
+  }
+  net.snapTimes.push(now);
+  while (net.snapTimes.length && now - net.snapTimes[0] > 1000) net.snapTimes.shift();
+
+  if (s.ph === 'countdown' && s.cd !== state.lastCd) {
+    state.lastCd = s.cd;
+    countdownText(s.cd);
+    audio.fx('beep');
+  } else if (s.ph === 'play' && state.lastCd !== 'go') {
+    state.lastCd = 'go';
+    countdownText('FIGHT', 'go');
+    if (state.game) pickupPop('shield', t('hud.startInvuln'));
+    setTimeout(() => { if (state.lastCd === 'go') $('#hud-center').textContent = ''; }, 800);
+  }
+
+  if (++hudTick % 3 !== 0) return;
+  const tl = Math.ceil(s.tl);
+  $('#hud-timer').textContent = `${Math.floor(tl / 60)}:${String(tl % 60).padStart(2, '0')}`;
+  $('#hud-timer-wrap').classList.toggle('sd', !!s.sd);
+  const m = scene?.metrics || {};
+  $('#hud-net').innerHTML = `<span>${t('hud.input')} <b>${Math.round(net.inputLat)}</b>ms</span><span><b>${m.fps || 0}</b> FPS</span><span>${t('hud.sync')} <b>${net.snapTimes.length}</b> Hz</span>`;
+  const mine = s.p.find((p) => p.id === state.user.id);
+  $('#spectate').classList.toggle('hidden', !mine || !!mine.a || s.ph === 'end' || state.resultShown);
+  for (const p of s.p) {
+    const el = document.getElementById('hp-' + p.id);
+    if (!el) continue;
+    el.classList.toggle('dead', !p.a);
+    el.classList.toggle('trapped', !!(p.a && p.tr));
+    el.querySelector('.hearts').innerHTML = !p.a
+      ? `<span class="out">${t('hud.out')}</span>`
+      : p.tr
+        ? `<span class="trap">${t('hud.trapped', { s: p.tr.toFixed(1) })}</span><i class="bar" style="width:${p.tr * 10}%"></i>`
+        : `<span class="ok">${t(p.iv ? 'hud.invuln' : 'hud.alive')}</span>${p.sh ? `<span class="sh">${icon('shield')}</span>` : ''}`;
+    const spd = p.s * 5;
+    el.querySelector('.pw').innerHTML = `<span>${icon('bomb')}${p.mb}</span><span>${icon('flame')}${powerSize(p.r)}</span><span class="${spd > 0 ? 'up' : spd < 0 ? 'down' : ''}">${icon('shoe')}${spd > 0 ? '+' : ''}${spd}%</span>${p.k ? `<span>${icon('kick')}</span>` : ''}<span>${icon('target')}${p.kl}</span>`;
+  }
+}
+
+function feed(html, cls = '') {
+  const root = $('#killfeed');
+  const d = document.createElement('div');
+  d.className = cls;
+  d.innerHTML = html;
+  root.appendChild(d);
+  while (root.children.length > 5) root.firstChild.remove();
+  setTimeout(() => d.remove(), 4200);
+}
+
+function pickupPop(type, extra) {
+  const def = POWERUPS[type];
+  if (!def) return;
+  const d = document.createElement('div');
+  d.innerHTML = `<span style="color:${def.color};display:flex">${icon(def.icon)}</span>${esc(t('pu.' + type))}${extra ? ` <small>${esc(extra)}</small>` : ''}`;
+  $('#pickup-pop').appendChild(d);
+  setTimeout(() => d.remove(), 1700);
+}
+
+const TIP_MS = 5000;
+function itemTip(type, mine) {
+  const def = POWERUPS[type];
+  const root = $('#item-tips');
+  if (!def || !root) return;
+  const params = mine ? { n: mine.mb, size: powerSize(mine.r), pct: (mine.s >= 0 ? '+' : '') + mine.s * 5 + '%' } : {};
+  // 同类道具连续拾取：刷新已有卡片
+  root.querySelector(`[data-type="${type}"]`)?.remove();
+  const d = document.createElement('div');
+  d.className = 'item-tip';
+  d.dataset.type = type;
+  d.style.setProperty('--pc', def.color);
+  d.innerHTML = `<span class="ic-box">${icon(def.icon)}</span>
+    <div class="tx"><div class="hd"><small>${t('tip.item')}</small><b>${esc(t('pu.' + type))}</b></div>
+    <p>${esc(t('pu.desc.' + type))}</p>${mine ? `<em>${esc(t('pu.stat.' + type, params))}</em>` : ''}</div>
+    <i class="timer" style="animation-duration:${TIP_MS}ms"></i>`;
+  root.prepend(d);
+  while (root.children.length > 3) root.lastChild.remove();
+  setTimeout(() => { d.classList.add('out'); setTimeout(() => d.remove(), 350); }, TIP_MS);
+}
+
+/** 对局中有人断线 / 重连：屏幕上方显示几秒
+ *  【头像】名字
+ *          断开连接 / 重新连接 */
+function broadcastBanner(person, good) {
+  const el = $('#hud-broadcast');
+  const d = document.createElement('div');
+  d.className = 'bc ' + (good ? 'on' : 'off');
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.appendChild(avatarEl(person, 16));
+  who.insertAdjacentHTML('beforeend', `<b>${esc(displayName(person.name, person.isBot))}</b>`);
+  d.appendChild(who);
+  d.insertAdjacentHTML('beforeend', `<small>${icon(good ? 'wifi' : 'wifiOff')}${t(good ? 'ev.reconnected' : 'ev.disconnected')}</small>`);
+  el.appendChild(d);
+  audio.fx(good ? 'shield' : 'hit', { vol: 0.5 });
+  while (el.children.length > 3) el.firstChild.remove();
+  setTimeout(() => { d.classList.add('out'); setTimeout(() => d.remove(), 400); }, 3200);
+}
+
+function hurtFx(id) {
+  const el = document.getElementById('hp-' + id);
+  if (el) { el.classList.remove('hurt'); void el.offsetWidth; el.classList.add('hurt'); }
+}
+
+function playEvents(s) {
+  const me = state.user.id;
+  const name = (id) => { const p = state.game.players.find((x) => x.id === id); return esc(p ? displayName(p.name, p.isBot) : ''); };
+  let booms = 0;
+  for (const e of s.e) {
+    switch (e.k) {
+      case 'place': audio.fx('place', { vol: 0.7 }); break;
+      case 'boom': if (booms++ < 2) audio.fx('boom'); break;
+      case 'crate': audio.fx('crate', { vol: 0.6 }); break;
+      case 'pick':
+        audio.fx('pick', { vol: e.id === me ? 1 : 0.35 });
+        if (e.id === me) {
+          const mine = s.p.find((p) => p.id === me);
+          itemTip(e.type, mine);
+        }
+        break;
+      case 'trap':
+        audio.fx('hit', { vol: e.id === me ? 1 : 0.5 });
+        hurtFx(e.id);
+        feed(`${icon('target')} ${t('ev.trapped', { name: name(e.id) })}`);
+        if (e.id === me) {
+          const f = $('#hit-flash');
+          f.classList.remove('on'); void f.offsetWidth; f.classList.add('on');
+          toast(t(state.game.mode === 'team' ? 'ev.trappedMeTeam' : 'ev.trappedMe'), true);
+        }
+        break;
+      case 'rescue':
+        audio.fx('shield');
+        feed(`${icon('shield')} ${t('ev.rescued', { by: name(e.by), name: name(e.id) })}`);
+        if (e.id === me) pickupPop('shield', t('ev.rescuedMe'));
+        break;
+      case 'pop':
+        audio.fx('boom', { vol: 0.6 });
+        feed(`${icon('close')} ${t('ev.popped', { by: name(e.by), name: name(e.id) })}`);
+        break;
+      case 'barrel':
+        audio.fx('boom', { vol: 0.8 });
+        break;
+      case 'steel':
+        audio.fx('kick', { vol: 0.6 });
+        break;
+      case 'shield':
+        audio.fx('shield');
+        if (e.id === me) pickupPop('shield', t('ev.blocked'));
+        break;
+      case 'die':
+        audio.fx('die');
+        hurtFx(e.id);
+        feed(`${icon('skull')} ${t('ev.eliminated', { name: name(e.id) })}`);
+        if (e.id === me) {
+          $('#spectate').classList.remove('hidden');
+          const f = $('#hit-flash');
+          f.classList.remove('on'); void f.offsetWidth; f.classList.add('on');
+        }
+        break;
+      case 'tele': audio.fx('tele', { vol: 0.6 }); break;
+      case 'kick': audio.fx('kick'); break;
+      case 'wall': audio.fx('wall', { vol: 0.5 }); break;
+      case 'go': audio.fx('go'); break;
+      case 'sd':
+        audio.fx('sd');
+        $('#hud-banner').classList.remove('hidden');
+        setTimeout(() => $('#hud-banner').classList.add('hidden'), 4000);
+        break;
+      default: break;
+    }
+  }
+}
+
+function confetti(n = 90) {
+  const root = $('#confetti');
+  root.innerHTML = '';
+  const colors = ['#ffb547', '#ffd27a', '#36d6ff', '#ffffff'];
+  for (let i = 0; i < n; i++) {
+    const c = document.createElement('i');
+    c.style.left = Math.random() * 100 + '%';
+    c.style.background = colors[i % colors.length];
+    c.style.animationDuration = 2.5 + Math.random() * 2.5 + 's';
+    c.style.animationDelay = Math.random() * 1.5 + 's';
+    root.appendChild(c);
+  }
+}
+
+function showResult(result) {
+  if (state.screen !== 'game' || state.resultShown) return;
+  state.resultShown = true;
+  $('#spectate').classList.add('hidden');
+  const me = result.players.find((p) => p.id === state.user.id);
+  const win = !!me?.win;
+  const modal = $('#result-modal');
+  modal.classList.toggle('lose', !win && !result.draw);
+  const title = $('#result-title');
+  if (result.draw) title.innerHTML = `DRAW<small>${t('result.draw')}</small>`;
+  else if (win) title.innerHTML = `VICTORY<small>${t('result.win')}</small>`;
+  else if (result.mode === 'team') title.innerHTML = `DEFEAT<small>${t('result.teamWin', { team: t('team.' + result.winnerTeam) })}</small>`;
+  else title.innerHTML = `DEFEAT<small>${t('result.lose')}</small>`;
+  const nStars = win ? 3 : result.draw && me?.alive ? 2 : me && me.place <= 2 ? 1 : 0;
+  $('#result-stars').innerHTML = [0, 1, 2].map((i) => `<span class="${i < nStars ? '' : 'off'}" style="animation-delay:${0.3 + i * 0.2}s">${icon('star')}</span>`).join('');
+  audio.fx(win ? 'win' : 'lose');
+  const ol = $('#result-list');
+  ol.innerHTML = '';
+  result.players.forEach((p, i) => {
+    const li = document.createElement('li');
+    if (p.win) li.className = 'win';
+    li.style.animationDelay = 0.5 + i * 0.08 + 's';
+    li.innerHTML = `<span class="place">${p.place}</span>`;
+    li.appendChild(avatarCanvas(p.skin, p.hat, 19, { dead: !p.alive }));
+    const team = result.mode === 'team' ? ` <small style="color:${TEAM_COLORS[p.team]}">${t('team.' + p.team)}</small>` : '';
+    if (p.quit) li.classList.add('quit');
+    li.insertAdjacentHTML('beforeend', `<span>${esc(displayName(p.name, p.isBot))}${team}${p.quit ? ` <small class="quit-tag">${t('result.quit')}</small>` : ''}</span><span class="k">${t('result.kills')} <b>${p.kills}</b>${p.rescues ? ` ${t('result.rescues')} <b>${p.rescues}</b>` : ''}${p.points ? `<span class="pts">${icon('gem')} +${p.points}</span>` : ''}</span>`);
+    ol.appendChild(li);
+  });
+  const rw = $('#result-reward');
+  if (me && (me.exp || me.points)) {
+    const total = me.totalExp ?? 0, prev = me.prevExp ?? Math.max(0, total - me.exp);
+    const lv0 = levelOf(prev), lv1 = me.level ?? levelOf(total);
+    const tier = tierOf(lv1);
+    const unlocked = (me.unlocked || []).map((h) => t('hat.' + h)).join(' / ');
+    rw.innerHTML = `<div class="rw-row"><span>${icon('star')}+${me.exp} EXP</span>${me.points ? `<span class="pts">${icon('gem')}+${me.points}</span>` : ''}</div>
+      <div class="rw-lv"><span class="rw-badge">${levelBadge(lv0)}</span><div class="expbar big" style="--tc:${tier.color}"><i style="width:${levelProgress(prev) * 100}%"></i><em></em></div></div>
+      ${me.levelUp ? `<div class="rw-up" style="--tc:${tier.color}">${t('lv.up', { lv: lv1, tier: t('tier.' + tier.index) })}</div>` : ''}
+      ${unlocked ? `<div class="rw-unlock">${icon('crown')} ${t('lv.unlocked', { hats: esc(unlocked) })}</div>` : ''}
+      ${(me.shopUnlocked || []).length ? `<div class="rw-unlock shop">${icon('gem')} ${t('lv.shopNew')}</div>` : ''}`;
+    rw.classList.remove('hidden');
+    animateExp(rw, prev, total);
+    setTimeout(() => audio.fx('coin'), 700);
+  } else {
+    rw.innerHTML = me ? `<small style="color:var(--muted)">${t('result.noReward')}</small>` : '';
+    rw.classList.toggle('hidden', !me);
+  }
+  modal.classList.remove('hidden');
+  if (win) confetti();
+  else $('#confetti').innerHTML = '';
+  clearTimeout(state.backTimer);
+  state.backTimer = setTimeout(backToRoom, 15000);
+}
+
+function animateExp(rw, from, to) {
+  const bar = rw.querySelector('.expbar i'), label = rw.querySelector('.expbar em'), badge = rw.querySelector('.rw-badge');
+  const t0 = performance.now() + 900, dur = 1400;
+  let shownLv = levelOf(from);
+  const step = (now) => {
+    if (!rw.isConnected) return;
+    const k = Math.max(0, Math.min(1, (now - t0) / dur));
+    const v = Math.round(from + (to - from) * (1 - (1 - k) ** 3));
+    const lv = levelOf(v);
+    if (lv !== shownLv) { shownLv = lv; badge.innerHTML = levelBadge(lv); badge.classList.remove('pop'); void badge.offsetWidth; badge.classList.add('pop'); audio.fx('shield'); }
+    const lo = levelFloor(lv), hi = levelCeil(lv);
+    bar.style.width = levelProgress(v) * 100 + '%';
+    label.textContent = hi == null ? 'MAX' : t('lv.exp', { cur: v - lo, need: hi - lo });
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function backToRoom() {
+  clearTimeout(state.backTimer);
+  if (state.screen !== 'game') return;
+  state.game = null;
+  input.reset();
+  const dest = state.room && state.inRoom ? 'room' : 'lobby';
+  show(dest);
+  setTimeout(() => {
+    $('#result-modal').classList.add('hidden');
+    if (dest === 'room') renderRoom();
+  }, 320);
+  loadLeaderboard();
+}
+
+// ================= 输入：移动在客户端计算后上报位置，服务器校验；炸弹 / 爆炸 / 伤害判定在服务器 =================
+const KEYMAP = {
+  ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down',
+  ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
+};
+const net = { seq: 0, pending: new Map(), inputLat: 0, lastAck: 0, snapTimes: [], samples: [] };
+function nextSeq() {
+  const q = ++net.seq;
+  net.pending.set(q, performance.now());
+  return q;
+}
+const input = {
+  held: [],
+  sent: null,
+  reset() { this.held = []; this.sync(true); },
+  press(d) {
+    if (!this.held.includes(d)) {
+      this.held.push(d);
+      scene?.localTap(d); // 本地立即响应
+    }
+    this.sync();
+  },
+  release(d) { this.held = this.held.filter((x) => x !== d); this.sync(); },
+  sync(force) {
+    const d = this.held[this.held.length - 1] || null;
+    scene?.setLocalDir(d);
+    if (d !== this.sent || force) {
+      this.sent = d;
+      send({ t: 'in', d, q: nextSeq() });
+    }
+  },
+  bomb() {
+    const pos = scene?.localBomb(); // 本地立即显示炸弹
+    send({ t: 'bomb', q: nextSeq(), ...(pos || {}) });
+  },
+};
+
+function gameActive() {
+  return state.screen === 'game' && state.game && !state.resultShown && document.activeElement?.tagName !== 'INPUT';
+}
+window.addEventListener('keydown', (e) => {
+  if (!gameActive()) {
+    if (state.screen === 'game' && state.resultShown && (e.code === 'Enter' || e.code === 'Space')) backToRoom();
+    return;
+  }
+  const d = KEYMAP[e.code];
+  if (d) { e.preventDefault(); input.press(d); }
+  if ((e.code === 'Space' || e.code === 'KeyJ' || e.code === 'KeyK') && !e.repeat) { e.preventDefault(); input.bomb(); }
+});
+window.addEventListener('keyup', (e) => {
+  const d = KEYMAP[e.code];
+  if (d && state.screen === 'game') input.release(d);
+});
+window.addEventListener('blur', () => { if (state.screen === 'game') input.reset(); });
+$$('#touch .dpad button').forEach((b) => {
+  const d = b.dataset.d;
+  b.addEventListener('pointerdown', (e) => { e.preventDefault(); input.press(d); });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, () => input.release(d));
+});
+$('#touch-bomb').addEventListener('pointerdown', (e) => { e.preventDefault(); input.bomb(); });
+
+// ================= 按钮 =================
+$('#btn-refresh').onclick = () => { send({ t: 'lobby' }); loadLeaderboard(); };
+$('#btn-quick').onclick = () => send({ t: 'quickJoin' });
+$('#btn-create').onclick = openCreate;
+const PW_RE = /^[A-Za-z0-9]{6}$/;
+$('#btn-create-ok').onclick = () => {
+  const password = $('#create-password').value.trim();
+  if (password && !PW_RE.test(password)) { shake($('#create-password')); toast(t('err.room_password_format'), true); return; }
+  send({ t: 'createRoom', name: $('#create-name').value, ...createSel, ...(password ? { password } : {}) });
+  closeModals();
+};
+for (const id of ['#create-password', '#join-password']) {
+  $(id).addEventListener('input', (e) => { e.target.value = e.target.value.replace(/[^A-Za-z0-9]/g, '').slice(0, 6); });
+}
+
+// ================= 房间密码 =================
+let pwRoomId = null;
+function askRoomPassword(id) {
+  pwRoomId = id;
+  $('#join-password').value = '';
+  openModal('#pw-modal');
+  setTimeout(() => $('#join-password').focus(), 50);
+}
+$('#btn-join-pw').onclick = () => {
+  const password = $('#join-password').value.trim();
+  if (!PW_RE.test(password)) { shake($('#join-password')); toast(t('err.room_password_format'), true); return; }
+  send({ t: 'joinRoom', id: pwRoomId, password });
+};
+$('#join-password').addEventListener('keydown', (e) => e.key === 'Enter' && $('#btn-join-pw').click());
+
+// ================= 对战记录 =================
+$('#btn-history').onclick = () => {
+  $('#history-list').innerHTML = `<div class="loading"><div class="spinner"></div></div>`;
+  openModal('#history-modal');
+  send({ t: 'history' });
+};
+function timeAgo(iso) {
+  const d = new Date(iso);
+  const sec = (Date.now() - d.getTime()) / 1000;
+  if (sec < 60) return t('history.justNow');
+  if (sec < 3600) return t('history.minAgo', { n: Math.floor(sec / 60) });
+  if (sec < 86400) return t('history.hourAgo', { n: Math.floor(sec / 3600) });
+  return d.toLocaleDateString(getLang(), { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(getLang(), { hour: '2-digit', minute: '2-digit' });
+}
+function renderHistory(list) {
+  const root = $('#history-list');
+  if (!list.length) { root.innerHTML = `<div class="empty">${icon('history')}${t('history.empty')}</div>`; return; }
+  root.innerHTML = '';
+  for (const g of list) {
+    const res = g.quit ? 'quit' : g.win ? 'win' : g.draw ? 'draw' : 'lose';
+    const card = document.createElement('div');
+    card.className = 'hist ' + res;
+    const mins = Math.floor(g.duration / 60), secs = String(g.duration % 60).padStart(2, '0');
+    card.innerHTML = `<div class="hist-res"><b>${t('history.' + res)}</b><small>#${g.place}</small></div>
+      <div class="hist-main">
+        <div class="hist-top"><span class="map">${esc(mapName(g.mapId))}</span><span>${t(g.mode === 'team' ? 'mode.teamShort' : 'mode.ffaShort')}</span><span>${mins}:${secs}</span><span class="ago">${timeAgo(g.at)}</span></div>
+        <div class="hist-players"></div>
+      </div>
+      <div class="hist-gain"><span>${icon('star')}+${g.exp}</span>${g.points ? `<span class="pts">${icon('gem')}+${g.points}</span>` : ''}<small>${t('result.kills')} ${g.kills}${g.rescues ? ` · ${t('result.rescues')} ${g.rescues}` : ''}</small></div>`;
+    const ps = card.querySelector('.hist-players');
+    for (const p of g.players) {
+      const chip = document.createElement('span');
+      chip.className = 'hist-p' + (p.me ? ' me' : '') + (p.win ? ' won' : '') + (p.quit ? ' left' : '');
+      if (g.mode === 'team') chip.style.setProperty('--tc', TEAM_COLORS[p.team]);
+      chip.appendChild(avatarEl(p, 11));
+      chip.insertAdjacentHTML('beforeend', `<span>${esc(displayName(p.name, p.isBot))}</span>`);
+      ps.appendChild(chip);
+    }
+    root.appendChild(card);
+  }
+}
+$('#btn-leave-room').onclick = () => {
+  state.inRoom = false;
+  state.room = null;
+  send({ t: 'leaveRoom' });
+  show('lobby');
+};
+$('#btn-add-bot').onclick = () => send({ t: 'addBot' });
+$('#btn-ready').onclick = () => {
+  const mine = state.room?.members.find((m) => m.id === state.user.id);
+  send({ t: 'ready', v: !mine?.ready });
+};
+$('#btn-start').onclick = () => send({ t: 'start' });
+$('#btn-back-room').onclick = backToRoom;
+$('#btn-quit').onclick = async () => {
+  if (state.resultShown) return backToRoom();
+  const ok = await confirmDialog(t('quit.text'), { title: t('quit.title'), yes: t('quit.yes'), no: t('quit.no') });
+  if (!ok || state.screen !== 'game') return;
+  state.inRoom = false;
+  state.room = null;
+  state.game = null;
+  input.reset();
+  send({ t: 'leaveRoom' });
+  show('lobby');
+};
+$('#btn-logout').onclick = async () => {
+  const tip = state.user.provider === 'github' ? t('logout.github') : t('logout.guest', { id: state.user.id });
+  const ok = await confirmDialog(tip, { title: t('logout.title'), yes: t('logout.yes'), no: t('common.cancel') });
+  if (!ok) return;
+  forgetToken();
+  state.conn?.close();
+  state.conn = null;
+  state.user = null;
+  state.room = null;
+  $('#login-notice').classList.add('hidden');
+  $('#login-form').classList.remove('hidden');
+  $('#login-loading').classList.add('hidden');
+  show('login');
+};
+
+let profileSel;
+$('#btn-profile').onclick = () => {
+  profileSel = avatarPicker(
+    { canvas: $('#profile-avatar'), skins: $('#profile-skins'), hats: $('#profile-hats'), name: $('#profile-name') },
+    state.user,
+    null,
+    state.user.level,
+    state.user.items || [],
+  );
+  renameMode(false);
+  openModal('#profile-modal');
+};
+$('#btn-profile-ok').onclick = () => {
+  send({ t: 'profile', skin: profileSel.skin, hat: profileSel.hat });
+  closeModals();
+};
+
+function syncRange(el) { el.style.setProperty('--v', el.value * 100 + '%'); }
+$$('.sound-btn').forEach((b) => (b.onclick = () => {
+  audio.unlock();
+  $('#vol-music').value = audio.musicVol;
+  $('#vol-sfx').value = audio.sfxVol;
+  syncRange($('#vol-music'));
+  syncRange($('#vol-sfx'));
+  $('#track-name').textContent = audio.track ? t('settings.nowPlaying', { title: TRACKS[audio.track].title }) : '';
+  openModal('#sound-modal');
+}));
+$('#vol-music').oninput = (e) => { audio.setMusicVolume(Number(e.target.value)); syncRange(e.target); };
+$('#vol-sfx').oninput = (e) => { audio.setSfxVolume(Number(e.target.value)); syncRange(e.target); audio.fx('pick'); };
+
+// ================= 延迟徽章（右上角） =================
+setInterval(() => {
+  const ms = state.conn?.ws?.readyState === 1 ? state.conn.ping : null;
+  const q = ms == null ? 1 : ms < 60 ? 4 : ms < 100 ? 3 : ms < 180 ? 2 : 1;
+  $$('.ping-badge').forEach((b) => {
+    b.dataset.q = q;
+    b.querySelector('span').textContent = ms == null ? '--' : ms;
+    b.title = t('title.ping');
+  });
+}, 500);
+
+// ================= 全屏 =================
+function enterFullscreen() {
+  const el = document.documentElement;
+  if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen().catch(() => {});
+}
+$$('.fs-btn').forEach((b) => (b.onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else enterFullscreen();
+}));
+document.addEventListener('fullscreenchange', () => {
+  $$('.fs-btn').forEach((b) => (b.title = t(document.fullscreenElement ? 'title.exitFullscreen' : 'title.fullscreen')));
+});
+
+// ================= 语言 =================
+/** 登录后：账号已有语言则采用它；没有则把当前语言写入账号 */
+function adoptAccountLang(user) {
+  const l = normalizeLang(user?.lang);
+  if (l) setLang(l);
+  else if (user && state.conn) send({ t: 'profile', lang: getLang() });
+  else if (user) state.pendingLang = getLang();
+}
+
+/** 语言切换器（登录页左下角 / 设置弹窗） */
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.lang-seg button');
+  if (!b) return;
+  setLang(b.dataset.lang);
+  if (state.user) {
+    state.user.lang = b.dataset.lang;
+    send({ t: 'profile', lang: b.dataset.lang }); // 写回该账号记录
+  }
+});
+
+/** 语言变化后重绘动态内容 */
+onLangChange(() => {
+  $$('.swatches button').forEach((b, i) => (b.title = t('skin.' + (i % SKINS.length))));
+  if (state.user) renderMe();
+  renderRooms();
+  loadLeaderboard();
+  if (state.room) renderRoom();
+  if (state.game) {
+    $('#hud-map').textContent = `${mapName(state.game.mapId)} · ${t(state.game.mode === 'team' ? 'mode.team' : 'mode.ffa')}`;
+    buildHudPlayers();
+  }
+  if (!$('#create-modal').classList.contains('hidden')) openCreate();
+});
+
+/** 把房间成员名按语言转换（机器人代号），用于 3D 台座标签 */
+function localizedRoom(r) {
+  return { ...r, members: r.members.map((m) => ({ ...m, name: displayName(m.name, m.isBot) })) };
+}
+
+applyI18n();
+boot();

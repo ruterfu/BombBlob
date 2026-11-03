@@ -1,0 +1,3 @@
+// 由 scripts/gen_rsa.py 生成：服务器 RSA-2048 公钥（SPKI / DER，base64）。
+// 对应的私钥只保存在服务器（环境变量 RSA_PRIVATE_KEY），不要提交到仓库。
+export const RSA_PUBLIC_KEY = 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAirNwKArY8hX8zSpfxRlF5aD6YBFYyrmyJ5DbUbLdMGFfpHuS4eh+rdQkEM540Q+R1gUyKyhrVARLRndrb0VhKr/zZ7Jvb68Xwv7MELRYsBqD1MW77doIIZxz7o9pmGMugEDbsxX3IlttFFd9I4wLmtXicwwAeYcgW/jqb1ExvvvKeusDvDVSpL0pd3p0+RTXRm41csDJXbig0JRSpkRFelUVzp21P3igrFfRQEEuHarOp3SYa8JhZbXR+WWYOX/EaAoRxuCinuwfnMW6MtONMc/3v/dPr+hxS4yKqmchcavEk7m4Ct2sw3I6MtWAxiOfRthxBhjO7sHe/6VwBTLn0wIDAQAB';
