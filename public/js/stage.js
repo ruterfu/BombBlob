@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { getMsaa, applyMsaa } from './gfx.js';
 import { buildBlob, buildBomb, textSprite, envMapFor, glowTexture, canvasTexture, animateHat } from './scene.js';
 
 const AMBER = '#ffb547';
@@ -89,8 +90,8 @@ export class MenuStage {
     this.clockLast = performance.now();
     this.t = 0;
 
-    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开 8× 多重采样（显卡不支持时 three.js 会自动降到它支持的最大值）
-    this.composer = new EffectComposer(r, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 8 }));
+    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开多重采样（设置里可选，默认 4×）
+    this.composer = new EffectComposer(r, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: getMsaa() }));
     this.composer.addPass(new RenderPass(scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.7, 0.55, 0.78);
     this.composer.addPass(this.bloom);
@@ -284,6 +285,8 @@ export class MenuStage {
     a.turntable = true;
     if (!first) a.hop = 1;
   }
+
+  setMsaa(n) { applyMsaa(this.composer, n); }
 
   /** 两边的装饰炸弹：用当前角色的颜色和正在使用的炸弹特效（未登录时用默认样式） */
   setBombStyle(skin, style) {

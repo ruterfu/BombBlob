@@ -451,6 +451,42 @@ class RuleTests(unittest.TestCase):
         self.assertNotIn("k", s2)
 
 
+class SyncRateTests(unittest.TestCase):
+    def test_broadcast_rate(self):
+        for hz in (10, 25, 30, 60):
+            g = Game("meadow", "ffa", 1, [{"id": "a", "name": "a", "skin": 0, "hat": 0}, {"id": "b", "name": "b", "skin": 1, "hat": 0}],
+                     rng=random.Random(1), net_rate=hz)
+            g.phase = "play"
+            g.round_time = g.time_left = 999
+            sent = []
+            g.broadcast = lambda s: sent.append(s)
+            for _ in range(TICK_RATE * 10):
+                g.tick()
+            self.assertAlmostEqual(len(sent), hz * 10, delta=2, msg=hz)
+            self.assertEqual(g.start_info()["netRate"], hz)
+            # 至少每 2 秒有一个带完整地图的关键帧
+            keys = [i for i, s in enumerate(sent) if "k" in s]
+            self.assertTrue(all(b - a <= hz * 2 + 1 for a, b in zip(keys, keys[1:])), (hz, keys[:5]))
+
+    def test_rate_clamped(self):
+        g = Game("meadow", "ffa", 1, [{"id": "a", "name": "a", "skin": 0, "hat": 0}], net_rate=500)
+        self.assertEqual(g.net_rate, 60)
+
+    def test_env_sync_hz(self):
+        import os
+        from backend.config import env_sync_hz
+        old = os.environ.pop("SYNC_HZ", None)
+        try:
+            self.assertEqual(env_sync_hz(), 30)
+            for raw, want in (("45", 45), ("5", 10), ("120", 60), ("abc", 30), ("20.0", 20)):
+                os.environ["SYNC_HZ"] = raw
+                self.assertEqual(env_sync_hz(), want, raw)
+        finally:
+            os.environ.pop("SYNC_HZ", None)
+            if old is not None:
+                os.environ["SYNC_HZ"] = old
+
+
 class BotSmokeTests(unittest.TestCase):
     def test_bots_finish_every_map(self):
         for m in MAPS:

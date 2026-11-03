@@ -258,6 +258,7 @@ class Room:
             on_anomaly=self.lobby.anomaly,
             shrink=self.settings["shrink"],
             items=self.settings.get("items", True),
+            net_rate=self.lobby.net_rate,
             round_time=60.0 * self.settings.get("time", 10),
         )
         self.broadcast_info()
@@ -291,7 +292,8 @@ class Room:
 
 
 class Lobby:
-    def __init__(self) -> None:
+    def __init__(self, net_rate: int = 30) -> None:
+        self.net_rate = net_rate  # 对局状态同步频率（Hz，来自 SYNC_HZ）
         self.clients: dict[str, Client] = {}
         self.rooms: dict[str, Room] = {}
         self.member_room: dict[str, str] = {}

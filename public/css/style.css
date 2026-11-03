@@ -642,3 +642,4 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
   .item-dock { left: 50%; transform: translateX(-50%); bottom: 8px; }
   .item-bar .slot { width: 46px; height: 46px; }
 }
+#msaa-seg { justify-self: start; } /* 设置里的多重采样：按内容宽度显示 */

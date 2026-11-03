@@ -4,6 +4,7 @@ import { SKINS, HATS, BASE_HATS, TEAM_COLORS, POWERUPS, BOMB_FX, ITEM_SLOTS, pow
 import { t, getLang, setLang, onLangChange, applyI18n, displayName, mapText, normalizeLang } from './i18n.js';
 import { MenuStage } from './stage.js';
 import { icon, hydrateIcons, drawIcon } from './icons.js';
+import { getMsaa, setMsaa } from './gfx.js';
 import { setLevelTable, levelOf, levelFloor, levelCeil, levelProgress, tierOf, hatUnlocked, HAT_UNLOCK, levelBadge, setShop, shopItems, shopItem } from './levels.js';
 
 const MAX_PLAYERS = 6;
@@ -1630,8 +1631,19 @@ $$('.sound-btn').forEach((b) => (b.onclick = () => {
   syncRange($('#vol-music'));
   syncRange($('#vol-sfx'));
   $('#track-name').textContent = audio.track ? t('settings.nowPlaying', { title: TRACKS[audio.track].title }) : '';
+  drawMsaaSeg();
   openModal('#sound-modal');
 }));
+/** 多重采样：无 / 2× / 4× / 8×（默认 4×），立即生效并保存在本地 */
+function drawMsaaSeg() {
+  segPicker($('#msaa-seg'), String(getMsaa()), (v) => {
+    const n = Number(v);
+    setMsaa(n);
+    stage?.setMsaa(n);
+    scene?.setMsaa(n);
+    drawMsaaSeg();
+  });
+}
 $('#vol-music').oninput = (e) => { audio.setMusicVolume(Number(e.target.value)); syncRange(e.target); };
 $('#vol-sfx').oninput = (e) => { audio.setSfxVolume(Number(e.target.value)); syncRange(e.target); audio.fx('pick'); };
 

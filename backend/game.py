@@ -27,8 +27,8 @@ from . import bot
 from .maps import build_map
 
 TICK_RATE = 60  # 服务器模拟频率（判定精度）
-NET_RATE = 20  # 状态广播频率（每 3 帧广播一次）
-BROADCAST_EVERY = TICK_RATE // NET_RATE
+NET_RATE = 30  # 默认状态广播频率（同步 Hz，可用环境变量 SYNC_HZ 调整，10–60）
+NET_RATE_MIN, NET_RATE_MAX = 10, 60
 DT = 1 / TICK_RATE
 ROUND_TIME = 600.0  # 一局 10 分钟
 SD_TIME = 60.0  # 最后 60 秒开始缩圈
@@ -63,7 +63,7 @@ HIT_GRACE_MAX = 0.15  # 延迟补偿：火焰命中客户端移动的玩家前�
 PATH_STEP = 0.05  # 路径碰撞检测采样步长（格）
 DROP_CHANCE = 0.5
 END_DELAY = 3.0
-KEYFRAME_TICKS = 120  # 每 2 秒强制下发一次完整地图（需为 BROADCAST_EVERY 的倍数）
+KEYFRAME_TICKS = 120  # 每 2 秒强制下发一次完整地图
 INF = math.inf
 BOMB_STYLES = ("poison", "water", "gold")  # 商店里的炸弹特效（纯画面）
 
@@ -210,6 +210,7 @@ class Game:
         round_time: float = ROUND_TIME,
         shrink: bool = True,  # 最后 60 秒是否缩圈（房间可选）
         items: bool = True,  # 是否掉落道具（房间可选）
+        net_rate: int = NET_RATE,  # 状态广播频率（同步 Hz）
     ) -> None:
         players = players or []
         self.rng = rng or random.Random()
@@ -221,6 +222,8 @@ class Game:
         self.round_time = round_time
         self.shrink = bool(shrink)
         self.items_on = bool(items)
+        self.net_rate = max(NET_RATE_MIN, min(NET_RATE_MAX, int(net_rate)))
+        self._last_key = 0  # 上次下发完整地图（关键帧）的帧号
         self.sd_time = min(SD_TIME, round_time) if self.shrink else 0.0
 
         m = build_map(map_id, self.rng)
@@ -450,8 +453,10 @@ class Game:
                 self.broadcast(self.snapshot())
                 self.events = []
                 return True
-        # 60Hz 模拟、30Hz 广播：事件在两次广播之间累积
-        if self.tick_no % BROADCAST_EVERY == 0 or any(e["k"] in ("go", "end") for e in self.events):
+        # 60Hz 模拟、按同步 Hz 广播：事件在两次广播之间累积。
+        # 按比例累积决定哪一帧广播（例如 25Hz 不能整除 60 帧），平均频率正好是设定值
+        due = (self.tick_no * self.net_rate) // TICK_RATE != ((self.tick_no - 1) * self.net_rate) // TICK_RATE
+        if due or any(e["k"] in ("go", "end") for e in self.events):
             self.broadcast(self.snapshot())
             self.events = []
         return False
@@ -1125,7 +1130,7 @@ class Game:
             "items": self.items_on,
             "sdTime": self.sd_time,
             "tickRate": TICK_RATE,
-            "netRate": NET_RATE,
+            "netRate": self.net_rate,
             "rules": {
                 "baseSpeed": BASE_SPEED,
                 "speedStep": SPEED_STEP,
@@ -1181,9 +1186,10 @@ class Game:
             "e": self.events,
         }
         # 地图只在变化时下发（另外每 2 秒一个关键帧）
-        if blocks != self._blocks_sent or (self.tick_no > 0 and self.tick_no % KEYFRAME_TICKS == 0):
+        if blocks != self._blocks_sent or self.tick_no - self._last_key >= KEYFRAME_TICKS:
             snap["k"] = blocks
             self._blocks_sent = blocks
+            self._last_key = self.tick_no
         return snap
 
     def blast_schedule(self, extra=None) -> list[list]:

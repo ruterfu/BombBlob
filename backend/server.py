@@ -268,7 +268,7 @@ def create_app(dsn: str | None = None, config: Config | None = None, github: Git
     app[RSA_KEY] = rsa_key or secure.load_private_key()
     if app[RSA_KEY] is None:
         raise SystemExit("缺少 RSA_PRIVATE_KEY：先运行 python scripts/gen_rsa.py 生成密钥对（见 README「传输加密」）")
-    app[LOBBY_KEY] = Lobby()
+    app[LOBBY_KEY] = Lobby(net_rate=cfg.sync_hz)
     app[CFG_KEY] = cfg
     app[GH_KEY] = github or GitHubOAuth(cfg.github_client_id, cfg.github_client_secret)
     if dsn:
@@ -304,7 +304,8 @@ def main() -> None:
               "正式部署前请运行 python scripts/gen_rsa.py 生成自己的密钥对。")
     if not secure.check_public_js(key):
         raise SystemExit("public/js/rsa-public.js 中的公钥与 RSA_PRIVATE_KEY 不匹配：请用 scripts/gen_rsa.py 重新生成，或换回对应的私钥")
-    print(f"BombBlob 服务器启动: http://localhost:{port}  （游客登录: {'开' if cfg.login_guest else '关'} · GitHub 登录: {'开' if cfg.login_github else '关'}）")
+    print(f"BombBlob 服务器启动: http://localhost:{port}  （游客登录: {'开' if cfg.login_guest else '关'} · GitHub 登录: {'开' if cfg.login_github else '关'}"
+          f" · 同步 {cfg.sync_hz} Hz）")
     web.run_app(create_app(config=cfg, rsa_key=key), host=host, port=port, print=None)
 
 

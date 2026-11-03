@@ -7,6 +7,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { SKINS, THEMES, POWERUPS, TEAM_COLORS, BOMB_FX, shade } from './themes.js';
+import { getMsaa, applyMsaa } from './gfx.js';
 import { drawIcon } from './icons.js';
 import { Predictor } from './predict.js';
 
@@ -799,8 +800,8 @@ export class GameScene {
     this.fallingWalls = new Map();
     this.flashes = [];
 
-    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开 8× 多重采样（显卡不支持时 three.js 会自动降到它支持的最大值）
-    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 8 }));
+    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开多重采样（设置里可选，默认 4×）
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: getMsaa() }));
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.5, 0.45, 0.82);
     this.composer.addPass(this.bloom);
@@ -873,6 +874,8 @@ export class GameScene {
     this.particles = [];
   }
 
+  setMsaa(n) { applyMsaa(this.composer, n); }
+
   tx(x) { return x - this.W / 2 + 0.5; }
   tz(y) { return y - this.H / 2 + 0.5; }
 
@@ -883,7 +886,7 @@ export class GameScene {
     this.myId = myId;
     this.W = info.w;
     this.H = info.h;
-    this.netRate = info.netRate || 20; // 服务器广播频率
+    this.netRate = info.netRate || 30; // 服务器广播频率（同步 Hz，服务器 SYNC_HZ 配置）
     this.pred = new Predictor(info);
     this.snaps = [];
     this.latSamples = [];

@@ -36,6 +36,25 @@ def env_bool(name: str, default: bool) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+SYNC_HZ_DEFAULT, SYNC_HZ_MIN, SYNC_HZ_MAX = 30, 10, 60
+
+
+def env_sync_hz() -> int:
+    """SYNC_HZ：对局状态同步频率，默认 30，范围 10–60（超出范围按边界取值，无法解析时用默认值）。"""
+    raw = os.environ.get("SYNC_HZ", "").strip()
+    if not raw:
+        return SYNC_HZ_DEFAULT
+    try:
+        hz = int(float(raw))
+    except ValueError:
+        print(f"[config] SYNC_HZ={raw!r} 不是数字，使用默认值 {SYNC_HZ_DEFAULT}")
+        return SYNC_HZ_DEFAULT
+    clamped = max(SYNC_HZ_MIN, min(SYNC_HZ_MAX, hz))
+    if clamped != hz:
+        print(f"[config] SYNC_HZ={hz} 超出范围 {SYNC_HZ_MIN}–{SYNC_HZ_MAX}，已调整为 {clamped}")
+    return clamped
+
+
 @dataclass
 class Config:
     login_guest: bool = False
@@ -43,6 +62,7 @@ class Config:
     github_client_id: str = ""
     github_client_secret: str = ""
     public_url: str = ""
+    sync_hz: int = 30  # 对局状态同步频率（Hz），SYNC_HZ，10–60
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -52,6 +72,7 @@ class Config:
             github_client_id=os.environ.get("GITHUB_CLIENT_ID", "").strip(),
             github_client_secret=os.environ.get("GITHUB_CLIENT_SECRET", "").strip(),
             public_url=os.environ.get("PUBLIC_URL", "").strip().rstrip("/"),
+            sync_hz=env_sync_hz(),
         )
         if cfg.login_github and not (cfg.github_client_id and cfg.github_client_secret):
             print("[config] LOGIN_GITHUB=true 但缺少 GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET，已关闭 GitHub 登录")

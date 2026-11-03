@@ -1,14 +1,13 @@
 # BombBlob 泡泡爆爆
 
-原创的多人在线果冻炸弹对战游戏（泡泡炸弹类玩法）。最多 6 人同场，个人混战或红蓝团战，8 张主题地图。
+脑子热用Claude做的多人在线果冻炸弹对战游戏（泡泡炸弹类玩法）。最多 6 人同场，个人混战或红蓝团战，8 张主题地图。
 
 - **前端**：three.js 3D 渲染 + 原生 HTML/CSS/JS（无需构建），简体中文 / 繁體中文（香港）/ 日本語 / English
 - **后端**：Python（aiohttp + WebSocket），服务器权威：炸弹、爆炸、伤害、道具、胜负全部由服务器判定；移动由客户端计算、服务器校验
 - **数据库**：PostgreSQL（asyncpg）：账号、一次性登录 token、经验 / 等级、点数、装饰、对局与对战记录
 - **安全**：登录与游戏通信在 HTTPS 之外再做一层 RSA + AES-128-GCM 加密
 
-📦 **部署到服务器请看 [docs/DEPLOY.md](docs/DEPLOY.md)**（Docker、环境变量、密钥、GitHub OAuth、HTTPS 反向代理、备份与升级、排障）。
-🎨 美术设计说明（生图用）：[docs/ART_BRIEF.md](docs/ART_BRIEF.md)
+📦 **部署到服务器请看 [DEPLOY.md](DEPLOY.md)**（Docker、环境变量、密钥、GitHub OAuth、HTTPS 反向代理、备份与升级、排障）。
 
 ## 快速开始（本地开发）
 
@@ -19,7 +18,7 @@ cp .env.example .env                                  # 按需修改（默认开
 .venv/bin/python -m backend.server                    # 打开 .env 里 PUBLIC_URL 对应的地址
 ```
 
-- `.env` 已在 `.gitignore` 中，不会提交；`.env.example` 自带一把**公开的默认 RSA 私钥**，仅供本地运行，部署前请按 [DEPLOY.md](docs/DEPLOY.md#3-生成传输加密密钥必做) 生成自己的密钥。
+- `.env` 已在 `.gitignore` 中，不会提交；`.env.example` 自带一把**公开的默认 RSA 私钥**，仅供本地运行，部署前请按 [DEPLOY.md](DEPLOY.md#3-生成传输加密密钥必做) 生成自己的密钥。
 - 本地用 `http://127.0.0.1` 或 `http://localhost` 访问即可；其他地址必须用 HTTPS（浏览器只在安全上下文提供加密功能）。
 - 运行测试：`.venv/bin/python -m unittest discover tests`（使用 `bombblob_test` 数据库）
 
@@ -177,7 +176,7 @@ psql "$DATABASE_URL" -f db/init.sql   # 可重复执行，不会覆盖线上调�
 
 ## 网络与延迟
 
-- 服务器以 **60Hz** 模拟（判定精度），以 **20Hz** 广播状态；地图只在变化时下发（重连时附带完整地图）。
+- 服务器以 **60Hz** 模拟（判定精度），以 **30Hz** 广播状态（同步频率，可用环境变量 `SYNC_HZ` 调整，10–60）；地图只在变化时下发（重连时附带完整地图）。
 - **移动在客户端**：自己的角色由客户端计算移动（`public/js/predict.js`），约 30Hz 上报位置 `{t:"mv", x, y, e}`。
 - **服务器校验移动**（`Game.client_move`）：
   - 速度：按角色当前速度累积移动额度（容差 15%，最多累积 1 秒以吸收网络抖动），超出即拒绝；
@@ -190,6 +189,7 @@ psql "$DATABASE_URL" -f db/init.sql   # 可重复执行，不会覆盖线上调�
 - **服务器时间戳插值**：其他玩家按服务器时间戳插值显示，消除网络抖动。
 - 客户端渲染锁定 60fps；WebSocket 关闭压缩以减少处理延迟。
 - 右上角显示与服务器的往返延迟（信号格），HUD 同时显示输入确认延迟、FPS、同步频率。
+- 设置里可选**多重采样**（无 / 2× / 4× / 8×，默认 4×，保存在本地浏览器），立即生效。
 
 ### 压力测试
 
@@ -238,7 +238,7 @@ psql "$DATABASE_URL" -f db/init.sql   # 可重复执行，不会覆盖线上调�
 
 ## 画面
 
-整体为成熟的竞技游戏风格（面向 20+ 玩家）：
+整体为成熟的竞技游戏风格：
 - **菜单场景**：暗色"角色展示台"——反光地面、六边形发光台座、聚光灯光柱、背景灯条与浮尘；房间内 6 个台座排成阵容，灯带颜色表示准备状态 / 队伍。
 - **渲染**：PBR 材质 + 环境反射（RoomEnvironment）、圆角倒角方块、砖石 / 木板 / 金属纹理、低角度主光与长阴影、辉光后处理（按主题调节阈值）、暗角。
 - **地图氛围**：遗迹广场（黄昏）、冰霜湖（雪原）、丛林秘境（萤火）、霓虹传送站（网格与水晶）、熔铸工厂（工业、熔岩、警示条纹）。
@@ -255,7 +255,7 @@ psql "$DATABASE_URL" -f db/init.sql   # 可重复执行，不会覆盖线上调�
 backend/
   server.py   HTTP 入口、加密登录接口、/gamesocket
   lobby.py    大厅、房间（密码 / 断线宽限）、聊天、商店 / 改名 / 对战记录等消息路由
-  game.py     服务器权威的游戏模拟（60Hz，20Hz 广播）、客户端移动校验
+  game.py     服务器权威的游戏模拟（60Hz，默认 30Hz 广播）、客户端移动校验
   bot.py      机器人 AI（与真人使用同一套输入接口）
   maps.py     8 张地图定义（四分之一镜像）
   store.py    PostgreSQL：账号、一次性 token、会话、奖励、等级、商店、对战记录
@@ -278,8 +278,6 @@ scripts/
   db.sh          本地 PostgreSQL 管理
   gen_rsa.py     生成 RSA 密钥对
   loadtest.py    压力测试
-docs/
-  DEPLOY.md      部署手册
-  ART_BRIEF.md   美术设计说明
-tests/           规则单元测试 + 端到端服务器测试（87 个）
+DEPLOY.md        部署手册
+tests/           规则单元测试 + 端到端服务器测试（124 个）
 ```
