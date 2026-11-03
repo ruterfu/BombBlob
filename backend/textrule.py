@@ -2,7 +2,7 @@
 
   * 先做 NFKC（全角字母 / 数字转半角），再去掉所有空白（空格、制表、换行、全角空格……）。
   * 剩下的只能是：中文（汉字）、英文字母 A–Z a–z、数字 0–9。
-  * 例外：公开聊天消息（chat.text）可以带空格（clean_spaced）。
+  * 例外：聊天消息（chat.text）不限制字符，只做纯文本清理（chat_text）。
   * 其他任何字符（标点、符号、表情、假名、韩文、带音标的字母……）都不允许：整条消息拒绝。
 """
 from __future__ import annotations
@@ -34,14 +34,6 @@ def clean(s: str) -> str:
         return s
     s = "".join(unicodedata.normalize("NFKC", s).split())  # 去掉所有空白
     if not all(map(char_ok, s)):
-        raise TextError(s)
-    return s
-
-
-def clean_spaced(s: str) -> str:
-    """公开聊天消息：允许空格（连续空白合并成一个空格、去掉首尾），其余规则同 clean。"""
-    s = " ".join(unicodedata.normalize("NFKC", s).split())
-    if not all(map(char_ok, s.replace(" ", ""))):
         raise TextError(s)
     return s
 
@@ -125,9 +117,20 @@ def _kick(m: dict) -> dict:
     return {"id": text(m.get("id"))}
 
 
+CHAT_MAX = 120
+
+
+def chat_text(s: str) -> str:
+    """聊天内容：不限制字符（标点、符号、表情、各国文字都可以），只当作纯文本处理——
+    去掉控制 / 格式 / 私用等不可见字符（含双向文本控制符，防止伪造显示顺序），
+    连续空白合并成一个空格、去掉首尾，最多 120 字。内容永远不会被 eval / exec / 拼进 SQL 或 HTML。"""
+    s = "".join(ch for ch in s if unicodedata.category(ch)[0] != "C" or ch in "\t\n")
+    return " ".join(s.split())[:CHAT_MAX]
+
+
 def _chat(m: dict) -> dict:
     v = m.get("text")
-    return {"text": clean_spaced(v) if isinstance(v, str) else None}  # 公开消息可以带空格
+    return {"text": chat_text(v) if isinstance(v, str) else None}  # 聊天：不限制字符，只做纯文本清理
 
 
 def _rename(m: dict) -> dict:

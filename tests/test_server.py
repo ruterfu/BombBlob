@@ -72,7 +72,12 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({"t": "chat", "text": "大家 好 hi"})
         m = await recv_until(ws, "chat")
         self.assertEqual(m["text"] if "text" in m else m.get("msg", {}).get("text"), "大家 好 hi")
-        await ws.send_json({"t": "chat", "text": "<script>"})
+        # 聊天不限制字符：原样作为纯文本转发（前端用 textContent / 转义显示，不会执行）
+        await ws.send_json({"t": "chat", "text": "<script>alert(1)</script> 哈哈！"})
+        m = await recv_until(ws, "chat", pred=lambda d: "script" in d.get("text", ""))
+        self.assertEqual(m["text"], "<script>alert(1)</script> 哈哈！")
+        # 其他字段仍然遵守文本规则
+        await ws.send_json({"t": "rename", "name": "<b>"})
         self.assertEqual((await recv_until(ws, "error"))["code"], "text_invalid")
 
     async def test_guest_gets_8_digit_id_and_can_login_by_id(self):

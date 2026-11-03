@@ -89,8 +89,8 @@ export class MenuStage {
     this.clockLast = performance.now();
     this.t = 0;
 
-    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开 4× 多重采样
-    this.composer = new EffectComposer(r, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开 8× 多重采样（显卡不支持时 three.js 会自动降到它支持的最大值）
+    this.composer = new EffectComposer(r, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 8 }));
     this.composer.addPass(new RenderPass(scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.7, 0.55, 0.78);
     this.composer.addPass(this.bloom);
@@ -190,13 +190,7 @@ export class MenuStage {
       scene.add(c);
     }
     this.bombs = [];
-    for (const [x, z] of [[3.6, 0.6], [-3.4, 0.9]]) {
-      const b = buildBomb(x > 0 ? 3 : 1);
-      b.group.position.set(x, 0, z);
-      b.group.scale.setScalar(1.15);
-      scene.add(b.group);
-      this.bombs.push(b);
-    }
+    this.setBombStyle(null, '');
 
     const cone = new THREE.Mesh(
       new THREE.ConeGeometry(2.2, 8, 48, 1, true),
@@ -259,6 +253,7 @@ export class MenuStage {
     root.add(blob.group);
     if (label) {
       const sp = textSprite(label, accent || AMBER);
+      sp.material.color.setScalar(0.72); // 压暗到泛光阈值以下：名字清楚但不发光
       sp.position.y = 1.18 * scale;
       sp.scale.multiplyScalar(Math.max(0.9, scale * 0.6));
       root.add(sp);
@@ -288,6 +283,28 @@ export class MenuStage {
     a.root.position.set(0, 0.37, 0);
     a.turntable = true;
     if (!first) a.hop = 1;
+  }
+
+  /** 两边的装饰炸弹：用当前角色的颜色和正在使用的炸弹特效（未登录时用默认样式） */
+  setBombStyle(skin, style) {
+    const key = `${skin}:${style || ''}`;
+    if (this.bombKey === key) return;
+    this.bombKey = key;
+    for (const b of this.bombs) {
+      this.scene.remove(b.group);
+      b.group.traverse((c) => {
+        c.geometry?.dispose();
+        if (c.material && c.material.map !== glowTexture()) c.material.dispose();
+      });
+    }
+    this.bombs = [];
+    for (const [x, z] of [[3.6, 0.6], [-3.4, 0.9]]) {
+      const b = buildBomb(skin ?? (x > 0 ? 3 : 1), style || '');
+      b.group.position.set(x, 0, z);
+      b.group.scale.setScalar(1.15);
+      this.scene.add(b.group);
+      this.bombs.push(b);
+    }
   }
 
   showLobby(user) {

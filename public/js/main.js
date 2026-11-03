@@ -39,6 +39,9 @@ function show(screen, instant = false) {
     }
     if (screen === 'login') stage?.showLogin(loginSkin, 0);
     if (screen === 'create') stage?.showLogin(charSel?.skin ?? 0, charSel?.hat ?? 0);
+    // 两边的装饰炸弹：登录 / 创建角色时用默认样式，进入大厅后换成自己正在用的炸弹特效
+    if (screen === 'login' || screen === 'create') stage?.setBombStyle(null, '');
+    else if (state.user) stage?.setBombStyle(state.user.skin, state.user.bomb?.style);
     if (screen === 'lobby' && state.user) stage?.showLobby(state.user);
     if (screen === 'room' && state.room) stage?.showRoom(localizedRoom(state.room), state.user.id);
   };
@@ -720,6 +723,7 @@ function renderMe() {
     audio.fx('coin');
   }
   lastCoins = u.points;
+  if (state.screen === 'lobby' || state.screen === 'room') stage?.setBombStyle(u.skin, u.bomb?.style); // 买了炸弹特效 / 换颜色后立即更新
   if (state.screen === 'lobby') stage?.showLobby(u);
 }
 
@@ -971,8 +975,7 @@ $$('.chat-form').forEach((f) => {
   f.addEventListener('submit', (e) => {
     e.preventDefault();
     const input = f.querySelector('input');
-    const text = cleanChat(input.value); // 公开消息：可带空格，只能中文 / 英文字母 / 数字
-    if (text === null) { shake(input); toast(t('err.text_invalid'), true); return; }
+    const text = cleanChat(input.value); // 聊天：不限制字符，显示时一律当纯文本（转义 / textContent）
     if (text) send({ t: 'chat', text });
     input.value = '';
   });

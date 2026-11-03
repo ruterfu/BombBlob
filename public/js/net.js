@@ -38,10 +38,9 @@ function charOk(ch) {
 }
 /** 去掉所有空白（空格、全角空格、换行……） */
 export const stripSpaces = (s) => Array.from(String(s ?? '').normalize('NFKC')).filter((ch) => ch.trim() !== '').join('');
-/** 公开聊天消息：允许空格（连续空白合并成一个、去掉首尾）；含不允许的字符时返回 null */
+/** 聊天消息：不限制字符，只合并多余空白、去掉首尾（服务器还会去掉不可见的控制字符）。只当作纯文本显示 */
 export function cleanChat(s) {
-  const v = String(s ?? '').normalize('NFKC').split(/\s+/u).filter(Boolean).join(' ');
-  return Array.from(v).every((ch) => ch === ' ' || charOk(ch)) ? v : null;
+  return String(s ?? '').split(/\s+/u).filter(Boolean).join(' ');
 }
 /** 返回清理后的文本；含不允许的字符时返回 null */
 export function cleanText(s) {

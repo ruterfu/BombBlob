@@ -79,8 +79,11 @@ class TextRuleTests(unittest.TestCase):
         self.assertEqual(m, {"t": "mv", "x": 1.5, "y": None, "f": "up", "m": None, "k": [3, 4],
                              "q": 7, "e": None, "p": None})  # 类型不对 → None；未约定字段不看
         self.assertIsNone(read_ws({"t": "hack"}))  # 不认识的类型
-        self.assertEqual(read_ws({"t": "chat", "text": "  你 好\t\thi "})["text"], "你 好 hi")  # 聊天可带空格
-        with self.assertRaises(TextError):
-            read_ws({"t": "chat", "text": "你好！"})
+        self.assertEqual(read_ws({"t": "chat", "text": "  你 好\t\thi "})["text"], "你 好 hi")
+        # 聊天不限制字符：标点、符号、表情、HTML 都原样保留（只当纯文本显示）
+        self.assertEqual(read_ws({"t": "chat", "text": "你好！<b>gg</b> 😀 ゲーム"})["text"], "你好！<b>gg</b> 😀 ゲーム")
+        # 不可见的控制 / 双向文本字符被去掉，最多 120 字
+        self.assertEqual(read_ws({"t": "chat", "text": "ab\u202ecd\u0000e\u200b"})["text"], "abcde")
+        self.assertEqual(len(read_ws({"t": "chat", "text": "x" * 500})["text"]), 120)
         with self.assertRaises(TextError):
             read_ws({"t": "in", "d": "up;drop"})

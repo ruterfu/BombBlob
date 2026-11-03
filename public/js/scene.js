@@ -799,8 +799,8 @@ export class GameScene {
     this.fallingWalls = new Map();
     this.flashes = [];
 
-    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开 4× 多重采样
-    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开 8× 多重采样（显卡不支持时 three.js 会自动降到它支持的最大值）
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 8 }));
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.5, 0.45, 0.82);
     this.composer.addPass(this.bloom);
