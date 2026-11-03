@@ -34,20 +34,17 @@
       <div id="login-loading" class="loading hidden"><div class="spinner"></div><span data-i18n="login.restoring"></span></div>
       <div id="login-form">
         <div id="login-notice" class="notice hidden"></div>
+        <!-- 登录方式由 /login-info 决定：LOGIN_GITHUB → GitHub 登录；LOGIN_GUEST → 8 位 ID + 游客登录 -->
         <div id="github-block" class="hidden">
           <button id="btn-github" class="btn btn-github btn-huge"><i data-icon="github"></i><span data-i18n="login.github"></span></button>
-          <p class="hint" data-i18n="login.githubHint"></p>
         </div>
         <div id="login-split" class="divider hidden"><span>OR</span></div>
         <div id="guest-block" class="hidden">
-          <button id="btn-guest" class="btn btn-yellow btn-huge"><i data-icon="play"></i><span data-i18n="login.guest"></span></button>
-          <p class="hint" data-i18n="login.guestHint"></p>
-          <!-- 8 位 ID 登录：只在游客模式开启时可用 -->
-          <button type="button" class="link-btn id-toggle" id="btn-id-toggle"><i data-icon="key"></i><span data-i18n="login.haveId"></span></button>
-          <div class="id-row hidden" id="id-row">
+          <div class="id-row" id="id-row">
             <input id="login-id" class="game-input digits" inputmode="numeric" maxlength="8" data-i18n-ph="login.idPlaceholder" autocomplete="off" spellcheck="false" />
             <button id="btn-id-login" class="btn btn-blue" data-i18n="login.idBtn"></button>
           </div>
+          <button id="btn-guest" class="btn btn-yellow btn-huge"><i data-icon="play"></i><span data-i18n="login.guest"></span></button>
         </div>
       </div>
     </div>
@@ -131,9 +128,11 @@
     <div class="panel room-settings">
       <div class="panel-title"><span data-i18n="room.map"></span> <small id="map-host-hint"></small></div>
       <div id="map-picker" class="map-picker"></div>
-      <div class="seg-row">
-        <div class="seg" id="mode-seg"><button data-v="ffa" data-i18n="mode.ffa"></button><button data-v="team" data-i18n="mode.team"></button></div>
-        <div class="seg" id="shrink-seg"><button data-v="1" data-i18n="shrink.on"></button><button data-v="0" data-i18n="shrink.off"></button></div>
+      <div class="opt-rows">
+        <div class="opt-row"><span data-i18n="opt.mode"></span><div class="seg" id="set-mode"><button data-v="ffa" data-i18n="mode.ffa"></button><button data-v="team" data-i18n="mode.team"></button></div></div>
+        <div class="opt-row"><span data-i18n="opt.items"></span><div class="seg" id="set-items"><button data-v="1" data-i18n="items.on"></button><button data-v="0" data-i18n="items.off"></button></div></div>
+        <div class="opt-row"><span data-i18n="opt.shrink"></span><div class="seg" id="set-shrink"><button data-v="1" data-i18n="shrink.on"></button><button data-v="0" data-i18n="shrink.off"></button></div></div>
+        <div class="opt-row"><span data-i18n="opt.time"></span><div class="seg" id="set-time"><button data-v="3" data-i18n="time.3"></button><button data-v="5" data-i18n="time.5"></button><button data-v="10" data-i18n="time.10"></button></div></div>
       </div>
     </div>
     <div class="room-bottom">
@@ -173,6 +172,8 @@
     <div class="hud-banner hidden" id="hud-banner"><b>WARNING</b><span data-i18n="hud.sdBanner"></span></div>
     <div class="spectate hidden" id="spectate"><i data-icon="eye"></i><span data-i18n="hud.spectate"></span></div>
     <div class="hud-chat" id="game-chat"></div>
+    <!-- 道具栏：6 格，按 1–6 使用（房间关闭道具时隐藏） -->
+    <div class="item-dock" id="item-dock"><div class="fx-bar" id="fx-bar"></div><div class="item-bar" id="item-bar"></div></div>
     <div class="touch-controls" id="touch">
       <div class="dpad">
         <button data-d="up">▲</button><button data-d="left">◀</button><button data-d="right">▶</button><button data-d="down">▼</button>
@@ -217,9 +218,11 @@
         <div class="pw-input"><i data-icon="lock"></i><input id="create-password" class="game-input" maxlength="6" data-i18n-ph="room.pwPlaceholder" autocomplete="off" spellcheck="false" /></div>
       </div>
       <div id="create-maps" class="map-picker"></div>
-      <div class="seg-row">
-        <div class="seg" id="create-mode"><button data-v="ffa" class="on" data-i18n="mode.ffa"></button><button data-v="team" data-i18n="mode.team"></button></div>
-        <div class="seg" id="create-shrink"><button data-v="1" class="on" data-i18n="shrink.on"></button><button data-v="0" data-i18n="shrink.off"></button></div>
+      <div class="opt-rows">
+        <div class="opt-row"><span data-i18n="opt.mode"></span><div class="seg" id="create-mode"><button data-v="ffa" class="on" data-i18n="mode.ffa"></button><button data-v="team" data-i18n="mode.team"></button></div></div>
+        <div class="opt-row"><span data-i18n="opt.items"></span><div class="seg" id="create-items"><button data-v="1" class="on" data-i18n="items.on"></button><button data-v="0" data-i18n="items.off"></button></div></div>
+        <div class="opt-row"><span data-i18n="opt.shrink"></span><div class="seg" id="create-shrink"><button data-v="1" class="on" data-i18n="shrink.on"></button><button data-v="0" data-i18n="shrink.off"></button></div></div>
+        <div class="opt-row"><span data-i18n="opt.time"></span><div class="seg" id="create-time"><button data-v="3" data-i18n="time.3"></button><button data-v="5" data-i18n="time.5"></button><button data-v="10" class="on" data-i18n="time.10"></button></div></div>
       </div>
       <p class="hint" data-i18n="create.hint"></p>
       <div class="dialog-actions">
@@ -284,6 +287,15 @@
         <button class="btn btn-gray" data-close data-i18n="common.cancel"></button>
         <button class="btn btn-yellow btn-big" id="btn-join-pw" data-i18n="rooms.join"></button>
       </div>
+    </div>
+  </div>
+
+  <!-- AI 难度：添加 AI / 修改 AI 难度时选择 -->
+  <div class="modal hidden" id="bot-modal">
+    <div class="dialog">
+      <button class="close-x" data-close><i data-icon="close"></i></button>
+      <div class="panel-head"><span data-i18n="ai.pick"></span><small>AI LEVEL</small></div>
+      <div class="bot-levels" id="bot-levels"></div>
     </div>
   </div>
 

@@ -10,8 +10,10 @@ from backend.maps import MAPS, W, H, build_map
 
 
 def make_game(map_id="meadow", n=2, mode="ffa", bots=False, seed=1):
+    levels = ("easy", "normal", "hard")
     players = [
-        {"id": f"p{i}", "name": f"p{i}", "skin": i, "hat": 0, "team": i % 2, "is_bot": bots} for i in range(n)
+        {"id": f"p{i}", "name": f"p{i}", "skin": i, "hat": 0, "team": i % 2, "is_bot": bots, "ai": levels[i % 3]}
+        for i in range(n)
     ]
     g = Game(map_id, mode, 1, players, rng=random.Random(seed))
     g.phase = "play"
@@ -460,7 +462,8 @@ class BotSmokeTests(unittest.TestCase):
                     if g.tick():
                         break
                 self.assertIsNotNone(g.result, f"{m['id']}/{mode} 没有结束")
-                self.assertGreater(booms[0], 30, f"{m['id']}/{mode} 机器人太被动")
+                # 很快分出胜负说明在积极进攻；拖得久的对局则要求有足够多的爆炸
+                self.assertTrue(booms[0] > 30 or g.elapsed < 120, f"{m['id']}/{mode} 机器人太被动（{booms[0]} 次爆炸 / {g.elapsed:.0f} 秒）")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import secure, store
+from . import secure, store, textrule
 from .config import Config, load_dotenv
 from .lobby import Lobby
 from .maps import map_summaries
@@ -34,23 +34,42 @@ class Sealed(Exception):
         self.status, self.body = status, body
 
 
-def sealed(handler):
+def not_found() -> web.Response:
+    """登录方式关闭时，对应接口直接 404（和不存在的地址一样）。"""
+    return web.Response(status=404, text="404: Not Found")
+
+
+async def sealed_call(request: web.Request, reader, handler) -> web.Response:
     """加密接口：请求体是 {ek, iv, ct}（RSA-OAEP 包裹的一次性 AES-128 密钥 + AES-GCM 密文），
-    响应同样用这个一次性密钥 AES-GCM 加密。解不开的请求直接 400（不泄露任何信息）。"""
+    响应同样用这个一次性密钥 AES-GCM 加密。解不开的请求直接 400（不泄露任何信息）。
+    reader 按字段名逐个取请求内容（textrule.read_*），handler(request, body) 处理业务。"""
+    try:
+        raw = await request.json()
+        k, body = secure.open_request(request.app[RSA_KEY], raw)
+    except (ValueError, UnicodeDecodeError, secure.CryptoError):
+        return web.json_response({"code": "bad_request"}, status=400)
+    try:
+        if not isinstance(body, dict):
+            raise textrule.TextError("not an object")
+        body = reader(body)  # 定向取值 + 全局文本规则
+    except textrule.TextError:
+        return web.json_response(secure.seal_response(k, {"code": "text_invalid"}), status=400)
+    try:
+        status, data = 200, await handler(request, body)
+    except Sealed as e:
+        status, data = e.status, e.body
+    return web.json_response(secure.seal_response(k, data), status=status)
 
-    async def wrapper(request: web.Request) -> web.Response:
-        try:
-            raw = await request.json()
-            k, body = secure.open_request(request.app[RSA_KEY], raw)
-        except (ValueError, UnicodeDecodeError, secure.CryptoError):
-            return web.json_response({"code": "bad_request"}, status=400)
-        try:
-            status, data = 200, await handler(request, body)
-        except Sealed as e:
-            status, data = e.status, e.body
-        return web.json_response(secure.seal_response(k, data), status=status)
 
-    return wrapper
+def _query(request: web.Request, name: str) -> str | None:
+    """查询参数同样遵守文本规则；不合规视为没有。"""
+    v = request.query.get(name)
+    if v is None:
+        return None
+    try:
+        return textrule.clean(v)
+    except textrule.TextError:
+        return None
 
 
 def _err(code: str, status: int) -> Sealed:
@@ -59,46 +78,62 @@ def _err(code: str, status: int) -> Sealed:
 
 
 def _login_ok(user: dict, token: str, session: str, created: bool) -> dict:
-    """登录成功：返回一次性登录 token、会话 ID 与 AES-128 会话密钥（整个响应已加密）。"""
+    """登录成功：返回会话 ID 与 AES-128 会话密钥（整个响应已加密）。
+
+    不再下发登录 token：客户端不做自动登录，每次都要手动点登录（GitHub 每次都要授权一次）。
+    """
     key = store.session_key(session)
-    return {"token": token, "session": session, "key": secure.b64(key), "created": created, "user": store.public_user(user)}
+    # return {"token": token, ...}  # 已停用：一次性 token 自动登录
+    return {"session": session, "key": secure.b64(key), "created": created, "user": store.public_user(user)}
 
 
-async def login_config(request: web.Request) -> web.Response:
-    """前端据此决定显示哪些登录方式。"""
+async def login_info(request: web.Request) -> web.Response:
+    """登录页进入时请求：前端据此决定显示哪些登录方式。"""
     cfg = request.app[CFG_KEY]
     return web.json_response({"guest": cfg.login_guest, "github": cfg.login_github})
 
 
-@sealed
-async def guest_login(request: web.Request, b: dict) -> dict:
-    """游客登录 / 一次性 token 自动登录。
+async def guest_login(request: web.Request) -> web.Response:
+    if not request.app[CFG_KEY].login_guest:
+        return not_found()
+    return await sealed_call(request, textrule.read_guest, _guest_login)
 
-    带 token：一次性消费该 token 恢复账号（游客或 GitHub 账号），并返回新的 token（旧 token 立即作废）。
-    不带 token：创建新游客账号（需要 LOGIN_GUEST=true）。
+
+async def _guest_login(request: web.Request, b: dict) -> dict:
+    """游客登录：创建新游客账号（需要 LOGIN_GUEST=true）。老游客用 8 位 ID 登录（/api/login）。
+
     返回的 session 用于 WebSocket 连接与断线重连（仅保存在服务器内存中）。
     """
     cfg = request.app[CFG_KEY]
-    if not b.get("token") and not cfg.login_guest:
-        raise _err("guest_disabled", 403)
+    # ---- 已停用：一次性 token 自动登录（客户端不再在本地保存 token，每次登录都要手动点击）----
+    # 带 token：一次性消费该 token 恢复账号（游客或 GitHub 账号），并返回新的 token（旧 token 立即作废）。
+    # if not b.get("token") and not cfg.login_guest:
+    #     raise _err("guest_disabled", 403)
+    # try:
+    #     user, token, session, created = await store.guest_login(
+    #         b.get("name"), b.get("skin"), b.get("hat"), token=b.get("token"), allowed=cfg.allowed_providers,
+    #         lang=b.get("lang"),
+    #     )
+    # except store.TokenInvalid:
+    #     raise _err("token_invalid", 401)
     try:
         user, token, session, created = await store.guest_login(
-            b.get("name"), b.get("skin"), b.get("hat"), token=b.get("token"), allowed=cfg.allowed_providers,
-            lang=b.get("lang"),
+            b.get("name"), b.get("skin"), b.get("hat"), allowed=cfg.allowed_providers, lang=b.get("lang"),
         )
-    except store.TokenInvalid:
-        raise _err("token_invalid", 401)
     except store.ProviderDisabled:
         raise _err("provider_disabled", 403)
     return _login_ok(user, token, session, created)
 
 
-@sealed
-async def id_login(request: web.Request, b: dict) -> dict:
+async def id_login(request: web.Request) -> web.Response:
+    if not request.app[CFG_KEY].login_guest:
+        return not_found()
+    return await sealed_call(request, textrule.read_login, _id_login)
+
+
+async def _id_login(request: web.Request, b: dict) -> dict:
     """凭 8 位 ID 登录游客账号（需要 LOGIN_GUEST=true；GitHub 账号不能凭 ID 登录）。"""
     cfg = request.app[CFG_KEY]
-    if not cfg.login_guest:
-        raise _err("guest_disabled", 403)
     try:
         user, token, session, _ = await store.guest_login(
             uid=str(b.get("id") or ""), allowed=cfg.allowed_providers, lang=b.get("lang")
@@ -123,11 +158,10 @@ def _redirect_home(fragment: str) -> web.HTTPFound:
 
 async def github_start(request: web.Request) -> web.StreamResponse:
     """跳转到 GitHub 授权页。"""
-    cfg = request.app[CFG_KEY]
-    if not cfg.login_github:
-        raise _redirect_home("oauth_error=disabled")
+    if not request.app[CFG_KEY].login_github:
+        return not_found()
     gh = request.app[GH_KEY]
-    state = gh.new_state({"lang": request.query.get("lang")})
+    state = gh.new_state({"lang": _query(request, "lang")})
     resp = web.HTTPFound(gh.authorize_url(_public_base(request) + CALLBACK_PATH, state))
     resp.set_cookie(STATE_COOKIE, state, max_age=600, httponly=True, samesite="Lax",
                     secure=_public_base(request).startswith("https"), path="/")
@@ -136,9 +170,8 @@ async def github_start(request: web.Request) -> web.StreamResponse:
 
 async def github_callback(request: web.Request) -> web.StreamResponse:
     """GitHub 回调：校验 state → 换 token → 读用户 → 登录 → 发一次性交换码跳回首页。"""
-    cfg = request.app[CFG_KEY]
-    if not cfg.login_github:
-        raise _redirect_home("oauth_error=disabled")
+    if not request.app[CFG_KEY].login_github:
+        return not_found()
     gh = request.app[GH_KEY]
     state = request.query.get("state", "")
     code = request.query.get("code", "")
@@ -160,11 +193,14 @@ async def github_callback(request: web.Request) -> web.StreamResponse:
     raise resp
 
 
-@sealed
-async def oauth_exchange(request: web.Request, b: dict) -> dict:
-    """用一次性交换码换取登录 token 与会话密钥（交换码 60 秒内有效、只能用一次）。"""
+async def oauth_exchange(request: web.Request) -> web.Response:
     if not request.app[CFG_KEY].login_github:
-        raise _err("github_disabled", 403)
+        return not_found()
+    return await sealed_call(request, textrule.read_oauth, _oauth_exchange)
+
+
+async def _oauth_exchange(request: web.Request, b: dict) -> dict:
+    """用一次性交换码换取会话与会话密钥（交换码 60 秒内有效、只能用一次）。"""
     payload = request.app[GH_KEY].redeem_code(str(b.get("code") or ""))
     if not payload:
         raise _err("code_invalid", 401)
@@ -181,7 +217,7 @@ async def health(request: web.Request) -> web.Response:
 
 
 async def websocket(request: web.Request) -> web.StreamResponse:
-    sid = request.query.get("session")
+    sid = _query(request, "session")
     user = store.user_by_session(sid)
     # 关闭 permessage-deflate：状态帧很小，压缩只会增加两端的处理延迟
     ws = web.WebSocketResponse(heartbeat=4, max_msg_size=4096, compress=False)  # 4 秒心跳：尽快发现断线
@@ -238,7 +274,7 @@ def create_app(dsn: str | None = None, config: Config | None = None, github: Git
     if dsn:
         app[DSN_KEY] = dsn
     app.cleanup_ctx.append(_db_ctx)
-    app.router.add_get("/api/config", login_config)
+    app.router.add_get("/login-info", login_info)
     app.router.add_post("/api/guest", guest_login)
     app.router.add_post("/api/login", id_login)
     app.router.add_get("/auth/github", github_start)
@@ -259,6 +295,7 @@ def main() -> None:
     port = int(os.environ.get("PORT", "8000"))
     host = os.environ.get("HOST", "0.0.0.0")
     cfg = Config.from_env()
+    cfg.check()  # 两种登录方式都关闭：无法启动
     key = secure.load_private_key()
     if key is None:
         raise SystemExit("缺少 RSA_PRIVATE_KEY：先运行 python scripts/gen_rsa.py 生成密钥对（见 README「传输加密」）")

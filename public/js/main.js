@@ -1,6 +1,6 @@
 import { audio, TRACKS } from './audio.js';
-import { Connection, guestLogin, idLogin, savedToken, forgetToken, fetchLoginConfig, oauthExchange, TokenInvalidError, UnknownIdError, ApiError } from './net.js';
-import { SKINS, HATS, BASE_HATS, TEAM_COLORS, POWERUPS, powerSize, drawAvatar, drawMapPreview } from './themes.js';
+import { Connection, guestLogin, idLogin, savedId, fetchLoginConfig, oauthExchange, UnknownIdError, ApiError, cleanText, cleanChat, stripSpaces, wireLang } from './net.js';
+import { SKINS, HATS, BASE_HATS, TEAM_COLORS, POWERUPS, BOMB_FX, ITEM_SLOTS, powerSize, drawAvatar, drawMapPreview } from './themes.js';
 import { t, getLang, setLang, onLangChange, applyI18n, displayName, mapText, normalizeLang } from './i18n.js';
 import { MenuStage } from './stage.js';
 import { icon, hydrateIcons, drawIcon } from './icons.js';
@@ -210,7 +210,7 @@ $('#btn-rename').onclick = async () => {
     renameMode(true);
     return;
   }
-  const name = $('#profile-name').value.trim();
+  const name = stripSpaces($('#profile-name').value);
   if (name === u.name) { renameMode(false); return; }
   const err = nameError(name);
   if (err) { shake($('#profile-name')); toast(t('err.' + err), true); return; }
@@ -250,6 +250,7 @@ function renderShop() {
   row0.appendChild(card);
   tools.appendChild(row0);
   list.appendChild(tools);
+  list.appendChild(bombShopSection(u));
   const groups = new Map();
   for (const it of shopItems()) (groups.get(it.level) || groups.set(it.level, []).get(it.level)).push(it);
   for (const [lv, items] of groups) {
@@ -289,6 +290,87 @@ function renderShop() {
     list.appendChild(sec);
   }
 }
+/** 商店：炸弹特效（纯画面；每次 200 点、有效 7 天；同一时间只有一种，再买会覆盖之前的） */
+function bombShopSection(u) {
+  const shop = state.bombShop || { styles: ['poison', 'water', 'gold'], price: 200, days: 7 };
+  const cur = u.bomb?.style || '';
+  const sec = document.createElement('div');
+  sec.className = 'shop-tier';
+  sec.innerHTML = `<div class="shop-tier-head" style="--tc:#b14dff">${icon('bomb')}<span>${t('bomb.section')}</span></div><p class="shop-note">${t('bomb.note', { days: shop.days })}</p>`;
+  const row = document.createElement('div');
+  row.className = 'shop-row';
+  for (const st of shop.styles) {
+    const active = cur === st;
+    const card = document.createElement('div');
+    card.className = 'shop-card bomb-card' + (active ? ' equipped' : '');
+    card.appendChild(bombPreview(st));
+    const short = Math.max(0, shop.price - (u.points || 0));
+    const left = active ? timeLeft(u.bomb.until) : '';
+    card.insertAdjacentHTML('beforeend', `<div class="nm">${esc(t('bomb.' + st))}</div>
+      <p class="desc">${esc(t('bomb.' + st + 'Desc'))}</p>
+      <div class="pr">${icon('gem')}${t('shop.price', { n: shop.price })}<span class="own">${active ? esc(t('bomb.left', { t: left })) : esc(t('bomb.days', { n: shop.days }))}</span></div>
+      ${short > 0 ? `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>` : `<button class="btn ${active ? 'btn-blue' : 'btn-yellow'}" data-act="buy">${t(active ? 'bomb.renew' : 'shop.buy')}</button>`}`);
+    card.querySelector('[data-act="buy"]')?.addEventListener('click', async () => {
+      const name = t('bomb.' + st);
+      let msg = t('bomb.confirm', { price: shop.price, name, days: shop.days });
+      if (active) msg = t('bomb.confirmRenew', { price: shop.price, name, days: shop.days, t: timeLeft(u.bomb.until) });
+      else if (cur) msg = t('bomb.confirmReplace', { price: shop.price, name, days: shop.days, old: t('bomb.' + cur), t: timeLeft(u.bomb.until) });
+      if (await confirmDialog(msg, { title: t('shop.title') })) send({ t: 'buy', item: st });
+    });
+    row.appendChild(card);
+  }
+  sec.appendChild(row);
+  return sec;
+}
+
+/** 剩余时间：X 天 Y 小时 / Y 小时 Z 分 */
+function timeLeft(until) {
+  const ms = Math.max(0, (until || 0) - Date.now());
+  const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  return d > 0 ? t('time.dh', { d, h }) : t('time.hm', { h, m });
+}
+
+/** 炸弹特效预览（2D 画布） */
+function bombPreview(style) {
+  const fx = BOMB_FX[style];
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 150;
+  const g = cv.getContext('2d');
+  const halo = g.createRadialGradient(75, 82, 10, 75, 82, 72);
+  halo.addColorStop(0, fx.glow + 'aa');
+  halo.addColorStop(1, fx.glow + '00');
+  g.fillStyle = halo;
+  g.fillRect(0, 0, 150, 150);
+  // 特效点缀
+  g.fillStyle = fx.parts[1];
+  for (let k = 0; k < 14; k++) {
+    const a = (k / 14) * Math.PI * 2, r = 46 + (k % 3) * 9;
+    g.globalAlpha = 0.35 + (k % 4) * 0.15;
+    g.beginPath();
+    if (style === 'water') g.ellipse(75 + Math.cos(a) * r, 92 + Math.sin(a) * r * 0.35, 3, 2, 0, 0, Math.PI * 2);
+    else g.arc(75 + Math.cos(a) * r * 0.8, 70 + Math.sin(a) * r * 0.7, style === 'poison' ? 6 + (k % 3) * 3 : 2 + (k % 2), 0, Math.PI * 2);
+    g.fill();
+  }
+  g.globalAlpha = 1;
+  // 炸弹本体
+  const body = g.createRadialGradient(64, 72, 4, 75, 86, 34);
+  body.addColorStop(0, '#ffffff');
+  body.addColorStop(0.18, fx.inner);
+  body.addColorStop(0.55, fx.body);
+  body.addColorStop(1, '#0b0b12');
+  g.fillStyle = body;
+  g.beginPath(); g.arc(75, 86, 32, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = fx.glow; g.lineWidth = 3;
+  g.beginPath(); g.ellipse(75, 86, 32, 8, 0, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#8a909c'; g.fillRect(68, 50, 14, 8);
+  g.strokeStyle = '#444'; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(78, 50); g.quadraticCurveTo(84, 40, 92, 38); g.stroke();
+  const sp = g.createRadialGradient(93, 37, 0, 93, 37, 9);
+  sp.addColorStop(0, '#fff'); sp.addColorStop(0.4, fx.glow); sp.addColorStop(1, fx.glow + '00');
+  g.fillStyle = sp; g.beginPath(); g.arc(93, 37, 9, 0, Math.PI * 2); g.fill();
+  return cv;
+}
+
 function openShop() {
   renderShop();
   openModal('#shop-modal');
@@ -313,17 +395,16 @@ function openCreateCharacter() {
   show('create');
   setTimeout(() => $('#char-name').focus(), 450);
 }
-/** 名字：trim 后长度必须大于 0；只允许文字 / 字母 / 数字 / 空格，最多 8 个字（最终以服务器校验为准） */
-const NAME_OK = /^[\p{L}\p{N} ]+$/u;
+/** 名字：去掉空格后长度必须大于 0；只允许中文 / 英文字母 / 数字，最多 8 个字（最终以服务器校验为准） */
 function nameError(raw) {
-  const name = raw.trim();
+  const name = stripSpaces(raw);
   if (name.length === 0) return 'name_invalid';
   if ([...name].length > 8) return 'name_too_long';
-  if (!NAME_OK.test(name)) return 'name_chars';
+  if (cleanText(name) === null) return 'name_chars';
   return null;
 }
 $('#btn-create-char').onclick = () => {
-  const name = $('#char-name').value.trim();
+  const name = stripSpaces($('#char-name').value);
   const err = nameError(name);
   if (err) { shake($('#char-name')); toast(t('err.' + err), true); return; }
   send({ t: 'createCharacter', name, skin: charSel.skin, hat: charSel.hat });
@@ -348,14 +429,8 @@ async function boot() {
   }
   $('#btn-guest').onclick = () => {
     audio.unlock();
-    // 有本地 token 时恢复原账号，否则新建游客账号（之后进入创建角色流程）
-    const token = savedToken();
-    doLogin(() => guestLogin({ token: token || undefined, lang: getLang() }));
-  };
-  $('#btn-id-toggle').onclick = () => {
-    const row = $('#id-row');
-    row.classList.toggle('hidden');
-    if (!row.classList.contains('hidden')) $('#login-id').focus();
+    // 新建游客账号（之后进入创建角色流程）；老游客用 8 位 ID 登录
+    doLogin(() => guestLogin({ lang: getLang() }));
   };
   $('#btn-id-login').onclick = () => {
     audio.unlock();
@@ -372,14 +447,18 @@ async function boot() {
   document.addEventListener('pointerdown', () => audio.unlock(), { once: true });
   document.addEventListener('keydown', () => audio.unlock(), { once: true });
 
-  // 登录方式由服务器配置决定（LOGIN_GUEST / LOGIN_GITHUB）
-  let cfg = { guest: true, github: false };
-  try { cfg = await fetchLoginConfig(); } catch { /* 默认游客 */ }
+  // 进入登录页时请求 /login-info：LOGIN_GITHUB → 只显示 GitHub 登录；LOGIN_GUEST → 只显示 8 位 ID 输入框和游客登录
+  let cfg = { guest: false, github: false };
+  try { cfg = await fetchLoginConfig(); } catch {
+    const n = $('#login-notice');
+    n.classList.remove('hidden');
+    n.textContent = t('err.network');
+  }
   state.loginCfg = cfg;
   $('#github-block').classList.toggle('hidden', !cfg.github);
   $('#guest-block').classList.toggle('hidden', !cfg.guest);
   $('#login-split').classList.toggle('hidden', !(cfg.guest && cfg.github));
-  $('#btn-github').onclick = () => { audio.unlock(); location.href = '/auth/github?lang=' + encodeURIComponent(getLang()); };
+  $('#btn-github').onclick = () => { audio.unlock(); location.href = '/auth/github?lang=' + encodeURIComponent(wireLang(getLang())); };
 
   // GitHub 回跳：#oauth=<一次性交换码> 或 #oauth_error=<原因>
   const hash = new URLSearchParams(location.hash.slice(1));
@@ -387,8 +466,9 @@ async function boot() {
   const oauthErr = hash.get('oauth_error');
   if (oauthCode || oauthErr) history.replaceState(null, '', location.pathname);
 
-  const token = savedToken();
-  if (token || oauthCode) {
+  // 不自动登录：上次的 8 位游客 ID 只填回输入框，仍需玩家自己点登录
+  if (cfg.guest) $('#login-id').value = savedId();
+  if (oauthCode) {
     $('#login-loading').classList.remove('hidden');
     $('#login-form').classList.add('hidden');
   }
@@ -400,8 +480,7 @@ async function boot() {
     n.classList.remove('hidden');
     n.textContent = t('oauth.' + (['denied', 'state', 'disabled'].includes(oauthErr) ? oauthErr : 'github'));
   }
-  if (oauthCode) await doLogin(() => oauthExchange(oauthCode), true);
-  else if (token) await doLogin(() => guestLogin({ token, lang: getLang() }), true);
+  if (oauthCode) await doLogin(() => oauthExchange(oauthCode), true); // 刚刚点了 GitHub 登录并完成授权
 }
 
 function shake(el) {
@@ -431,7 +510,6 @@ async function doLogin(fn, auto = false) {
     $('#login-loading').classList.add('hidden');
     $('#login-form').classList.remove('hidden');
     let text = errText(e);
-    if (e instanceof TokenInvalidError) text = t(state.loginCfg?.guest ? 'err.token_invalid.guest' : 'err.token_invalid.github');
     if (e instanceof UnknownIdError) shake($('#login-id'));
     const n = $('#login-notice');
     n.classList.remove('hidden');
@@ -512,6 +590,7 @@ function onMessage(m) {
       setLevelTable(m.levels);
       setShop(m.shop);
       state.renameCardPrice = m.renameCardPrice;
+      state.bombShop = m.bombShop;
       renderMe();
       if (!m.roomId) {
         // 服务器说我们不在任何房间（例如断线期间对局已结束）：以服务器为准离开房间 / 对局界面
@@ -539,7 +618,7 @@ function onMessage(m) {
       break;
     case 'bought':
       audio.fx('coin');
-      toast(m.item === 'rename' ? t('shop.boughtCard') : t('shop.bought', { name: t('hat.' + m.item) }));
+      toast(m.item === 'rename' ? t('shop.boughtCard') : t('shop.bought', { name: t((BOMB_FX[m.item] ? 'bomb.' : 'hat.') + m.item) }));
       break;
     case 'leaderboard':
       renderLeaderboard(m.list || []);
@@ -596,6 +675,10 @@ function onMessage(m) {
       if (m.code === 'room_password') { askRoomPassword(m.params?.id); break; }
       if (m.code === 'room_password_wrong') shake($('#join-password'));
       toast(errText(m), true);
+      break;
+    case 'warn':
+      // 服务器多次发现异常移动 / 异常放炸弹间隔
+      toast(t('warn.' + m.code), true);
       break;
     case 'history':
       renderHistory(m.list || []);
@@ -742,14 +825,16 @@ function segPicker(root, value, onPick, locked = false) {
   });
 }
 
-const createSel = { mapId: 'meadow', mode: 'ffa', shrink: true };
+const createSel = { mapId: 'meadow', mode: 'ffa', items: true, shrink: true, time: 10 };
 function openCreate() {
-  $('#create-name').value = t('room.defaultName', { name: state.user.name });
+  $('#create-name').value = cleanText(t('room.defaultName', { name: state.user.name })) ?? '';
   $('#create-password').value = '';
   const draw = () => {
     mapPicker($('#create-maps'), createSel.mapId, (id) => { createSel.mapId = id; draw(); });
     segPicker($('#create-mode'), createSel.mode, (v) => { createSel.mode = v; draw(); });
+    segPicker($('#create-items'), createSel.items ? '1' : '0', (v) => { createSel.items = v === '1'; draw(); });
     segPicker($('#create-shrink'), createSel.shrink ? '1' : '0', (v) => { createSel.shrink = v === '1'; draw(); });
+    segPicker($('#create-time'), String(createSel.time), (v) => { createSel.time = Number(v); draw(); });
   };
   draw();
   openModal('#create-modal');
@@ -781,7 +866,7 @@ function renderRoom() {
       const can = isHost && waiting && bots < r.botLimit;
       el.className = 'member-row empty-slot' + (can ? ' can' : '');
       el.innerHTML = can ? `${icon('plus')} ${t('room.addAi')}` : t('room.empty');
-      if (can) el.onclick = () => send({ t: 'addBot' });
+      if (can) el.onclick = addNormalBot;
       list.appendChild(el);
       continue;
     }
@@ -789,6 +874,19 @@ function renderRoom() {
     el.appendChild(avatarEl(m, 17));
     const status = m.id === r.hostId ? `${icon('crown')}${t('room.host')}` : m.isBot ? `${icon('bot')}${t('room.bot')}` : m.ready ? `${icon('check')}${t('room.isReady')}` : t('room.notReady');
     el.insertAdjacentHTML('beforeend', `<div class="nm">${esc(displayName(m.name, m.isBot))}${m.level ? levelBadge(m.level) : ''}<div class="st ${m.ready || m.isBot ? 'ready' : ''}">${status}${m.connected ? '' : ` · <span class="off">${t('room.offline')}</span>`}</div></div>`);
+    if (m.isBot) {
+      // AI 难度：房主可点击修改（形象随难度一起换）
+      const lv = AI_LEVELS.includes(m.ai) ? m.ai : 'normal';
+      const canEdit = isHost && waiting;
+      const tag = document.createElement(canEdit ? 'button' : 'span');
+      tag.className = 'ai-lv ' + lv;
+      tag.textContent = t('ai.' + lv) + (canEdit ? ' ▾' : '');
+      if (canEdit) {
+        tag.title = t('ai.change');
+        tag.onclick = (e) => { e.stopPropagation(); openBotPicker(m.id, lv); };
+      }
+      el.querySelector('.st').appendChild(tag);
+    }
     if (team) {
       const canSwitch = waiting && (m.id === me || isHost);
       const tb = document.createElement('button');
@@ -813,8 +911,11 @@ function renderRoom() {
 
   $('#map-host-hint').textContent = t(isHost ? 'room.hostCanPick' : 'room.hostOnly');
   mapPicker($('#map-picker'), r.settings.mapId, (id) => send({ t: 'settings', mapId: id }), !isHost || !waiting);
-  segPicker($('#mode-seg'), r.settings.mode, (v) => send({ t: 'settings', mode: v }), !isHost || !waiting);
-  segPicker($('#shrink-seg'), r.settings.shrink === false ? '0' : '1', (v) => send({ t: 'settings', shrink: v === '1' }), !isHost || !waiting);
+  const locked = !isHost || !waiting;
+  segPicker($('#set-mode'), r.settings.mode, (v) => send({ t: 'settings', mode: v }), locked);
+  segPicker($('#set-items'), r.settings.items === false ? '0' : '1', (v) => send({ t: 'settings', items: v === '1' }), locked);
+  segPicker($('#set-shrink'), r.settings.shrink === false ? '0' : '1', (v) => send({ t: 'settings', shrink: v === '1' }), locked);
+  segPicker($('#set-time'), String(r.settings.time || 10), (v) => send({ t: 'settings', time: Number(v) }), locked);
 
   const addBot = $('#btn-add-bot');
   addBot.classList.toggle('hidden', !isHost);
@@ -870,7 +971,8 @@ $$('.chat-form').forEach((f) => {
   f.addEventListener('submit', (e) => {
     e.preventDefault();
     const input = f.querySelector('input');
-    const text = input.value.trim();
+    const text = cleanChat(input.value); // 公开消息：可带空格，只能中文 / 英文字母 / 数字
+    if (text === null) { shake(input); toast(t('err.text_invalid'), true); return; }
     if (text) send({ t: 'chat', text });
     input.value = '';
   });
@@ -918,7 +1020,62 @@ async function startGame(info) {
   $('#hud-map').textContent = `${mapName(info.mapId)} · ${t(info.mode === 'team' ? 'mode.team' : 'mode.ffa')}`;
   audio.play(TRACKS[info.theme] ? info.theme : 'meadow');
   buildHudPlayers();
+  buildItemBar(info.items !== false);
   input.reset();
+}
+
+/** 道具栏：左下角 6 格。点击或按数字键 1–6 使用 */
+function buildItemBar(on) {
+  const dock = $('#item-dock');
+  dock.classList.toggle('hidden', !on);
+  $('#game-chat').classList.toggle('above-items', on);
+  const bar = $('#item-bar');
+  bar.innerHTML = '';
+  for (let i = 0; i < ITEM_SLOTS; i++) {
+    const b = document.createElement('button');
+    b.className = 'slot empty';
+    b.dataset.s = i;
+    b.innerHTML = `<b>${i + 1}</b><span class="ic"></span>`;
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); useItem(i); });
+    bar.appendChild(b);
+  }
+  state.itemSig = '';
+  $('#fx-bar').innerHTML = '';
+}
+
+function useItem(i) {
+  const kind = state.myItems?.[i];
+  const slot = $('#item-bar').children[i];
+  if (!kind) { slot?.classList.remove('shake'); void slot?.offsetWidth; slot?.classList.add('shake'); return; }
+  send({ t: 'use', s: i });
+}
+
+const FX_KEYS = [['ish', 'ishield'], ['bt', 'boots'], ['gh', 'ghost'], ['wg', 'wings']];
+function updateItemBar(me) {
+  if (!me) return;
+  const items = (me.it || '').split(',');
+  state.myItems = items;
+  const sig = items.join(',') + (me.tr > 0 ? 't' : '');
+  if (sig !== state.itemSig) {
+    state.itemSig = sig;
+    [...$('#item-bar').children].forEach((b, i) => {
+      const kind = items[i];
+      const def = POWERUPS[kind];
+      b.classList.toggle('empty', !def);
+      // 针只能在被困时用；其他道具被困时不能用
+      b.classList.toggle('usable', !!def && (kind === 'needle' ? me.tr > 0 : !(me.tr > 0)));
+      b.style.setProperty('--pc', def ? def.color : 'transparent');
+      b.querySelector('.ic').innerHTML = def ? icon(def.icon) : '';
+      b.title = def ? `${t('pu.' + kind)} · ${t('pu.desc.' + kind)}` : '';
+    });
+  }
+  // 正在生效的效果（剩余秒数）
+  const html = FX_KEYS.filter(([k]) => me[k] > 0).map(([k, kind]) => {
+    const def = POWERUPS[kind];
+    return `<span class="fx" style="--pc:${def.color}">${icon(def.icon)}${Math.ceil(me[k])}s</span>`;
+  }).join('');
+  const fx = $('#fx-bar');
+  if (fx.innerHTML !== html) fx.innerHTML = html;
 }
 
 function buildHudPlayers() {
@@ -954,6 +1111,7 @@ function onSnapshot(s) {
   // 输入确认延迟：发送输入 → 服务器回传已处理该序号
   const now = performance.now();
   const meSnap = s.p.find((p) => p.id === state.user.id);
+  updateItemBar(meSnap);
   if (meSnap && meSnap.q > net.lastAck) {
     const t0 = net.pending.get(meSnap.q);
     if (t0 && s.ph === 'play') {
@@ -1080,7 +1238,15 @@ function playEvents(s) {
         audio.fx('pick', { vol: e.id === me ? 1 : 0.35 });
         if (e.id === me) {
           const mine = s.p.find((p) => p.id === me);
-          itemTip(e.type, mine);
+          itemTip(e.type, POWERUPS[e.type]?.item ? null : mine);
+        }
+        break;
+      case 'use':
+        // 使用道具：自己有音效；用针脱困所有人都看得到
+        if (e.id === me) audio.fx(e.it === 'needle' ? 'shield' : 'pick');
+        if (e.it === 'needle') {
+          feed(`${icon('needle')} ${t('ev.needle', { name: name(e.id) })}`);
+          if (e.id !== me) audio.fx('shield', { vol: 0.4 });
         }
         break;
       case 'trap':
@@ -1276,6 +1442,7 @@ const input = {
 function gameActive() {
   return state.screen === 'game' && state.game && !state.resultShown && document.activeElement?.tagName !== 'INPUT';
 }
+const SLOT_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4, Digit6: 5, Numpad1: 0, Numpad2: 1, Numpad3: 2, Numpad4: 3, Numpad5: 4, Numpad6: 5 };
 window.addEventListener('keydown', (e) => {
   if (!gameActive()) {
     if (state.screen === 'game' && state.resultShown && (e.code === 'Enter' || e.code === 'Space')) backToRoom();
@@ -1284,6 +1451,9 @@ window.addEventListener('keydown', (e) => {
   const d = KEYMAP[e.code];
   if (d) { e.preventDefault(); input.press(d); }
   if ((e.code === 'Space' || e.code === 'KeyJ' || e.code === 'KeyK') && !e.repeat) { e.preventDefault(); input.bomb(); }
+  // 数字键 1–6：使用道具栏对应格子
+  const slot = SLOT_KEYS[e.code];
+  if (slot !== undefined && !e.repeat) { e.preventDefault(); useItem(slot); }
 });
 window.addEventListener('keyup', (e) => {
   const d = KEYMAP[e.code];
@@ -1305,7 +1475,9 @@ const PW_RE = /^[A-Za-z0-9]{6}$/;
 $('#btn-create-ok').onclick = () => {
   const password = $('#create-password').value.trim();
   if (password && !PW_RE.test(password)) { shake($('#create-password')); toast(t('err.room_password_format'), true); return; }
-  send({ t: 'createRoom', name: $('#create-name').value, ...createSel, ...(password ? { password } : {}) });
+  const name = cleanText($('#create-name').value);
+  if (name === null) { shake($('#create-name')); toast(t('err.text_invalid'), true); return; }
+  send({ t: 'createRoom', name, ...createSel, ...(password ? { password } : {}) });
   closeModals();
 };
 for (const id of ['#create-password', '#join-password']) {
@@ -1374,7 +1546,30 @@ $('#btn-leave-room').onclick = () => {
   send({ t: 'leaveRoom' });
   show('lobby');
 };
-$('#btn-add-bot').onclick = () => send({ t: 'addBot' });
+$('#btn-add-bot').onclick = addNormalBot;
+
+/** 添加 AI：直接加一个「中等」，之后可在左侧成员列表点难度标签修改 */
+function addNormalBot() {
+  send({ t: 'addBot', level: 'normal' });
+}
+
+/** 修改某个 AI 的难度（左侧成员列表里点难度标签打开） */
+const AI_LEVELS = ['easy', 'normal', 'hard'];
+function openBotPicker(id, current) {
+  const box = $('#bot-levels');
+  box.innerHTML = '';
+  for (const lv of AI_LEVELS) {
+    const b = document.createElement('button');
+    b.className = lv + (lv === current ? ' on' : '');
+    b.innerHTML = `<b>${esc(t('ai.' + lv))}</b><small>${esc(t('ai.' + lv + 'Desc'))}</small>`;
+    b.onclick = () => {
+      if (lv !== current) send({ t: 'botLevel', id, level: lv });
+      closeModals();
+    };
+    box.appendChild(b);
+  }
+  openModal('#bot-modal');
+}
 $('#btn-ready').onclick = () => {
   const mine = state.room?.members.find((m) => m.id === state.user.id);
   send({ t: 'ready', v: !mine?.ready });
@@ -1396,7 +1591,6 @@ $('#btn-logout').onclick = async () => {
   const tip = state.user.provider === 'github' ? t('logout.github') : t('logout.guest', { id: state.user.id });
   const ok = await confirmDialog(tip, { title: t('logout.title'), yes: t('logout.yes'), no: t('common.cancel') });
   if (!ok) return;
-  forgetToken();
   state.conn?.close();
   state.conn = null;
   state.user = null;
@@ -1404,6 +1598,7 @@ $('#btn-logout').onclick = async () => {
   $('#login-notice').classList.add('hidden');
   $('#login-form').classList.remove('hidden');
   $('#login-loading').classList.add('hidden');
+  if (state.loginCfg?.guest) $('#login-id').value = savedId();
   show('login');
 };
 

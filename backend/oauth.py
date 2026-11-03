@@ -62,7 +62,7 @@ class GitHubOAuth:
     def new_state(self, meta: dict | None = None) -> str:
         """生成 state；meta 为随 state 保存的附加信息（例如发起登录时的语言）。"""
         self._gc(self._states, STATE_TTL)
-        st = secrets.token_urlsafe(24)
+        st = secrets.token_hex(24)
         self._states[st] = (time.time(), meta or {})
         return st
 
@@ -106,7 +106,7 @@ class GitHubOAuth:
     # ---------- 一次性交换码 ----------
     def issue_code(self, payload: dict) -> str:
         self._gc(self._codes, CODE_TTL)
-        code = secrets.token_urlsafe(24)
+        code = secrets.token_hex(24)
         self._codes[code] = (time.time(), payload)
         return code
 

@@ -1,6 +1,6 @@
 """端到端测试（需要 PostgreSQL，先运行 scripts/db.sh start）。
 
-覆盖：游客登录 / 一次性 token / WebSocket / 建房 / 选房加入 / 6 人上限 /
+覆盖：游客登录 / WebSocket / 建房 / 选房加入 / 6 人上限 /
 机器人上限（6 - 真人数）/ 地图选择（5 张 + 随机）/ 开局 / 服务器权威状态 / 战绩入库。
 """
 import asyncio
@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from backend.maps import MAP_IDS
 from tests.secure_client import TEST_RSA, spost, sws
+from backend.config import Config
 from backend.server import LOBBY_KEY, create_app
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", "postgresql://postgres@127.0.0.1:5433/bombblob_test")
@@ -34,9 +35,9 @@ async def recv_until(ws, t, timeout=8.0, pred=None):
 class ServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         con = await asyncpg.connect(TEST_DSN)
-        await con.execute("DROP TABLE IF EXISTS user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
+        await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
         await con.close()
-        self.client = TestClient(TestServer(create_app(TEST_DSN, rsa_key=TEST_RSA)))
+        self.client = TestClient(TestServer(create_app(TEST_DSN, config=Config(login_guest=True), rsa_key=TEST_RSA)))
         await self.client.start_server()
         self.sockets = []
 
@@ -46,7 +47,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
 
     async def login(self, name=None, token=None, expect=200):
-        r = await spost(self.client, "/api/guest", {"name": name, "skin": 2, "hat": 1, "token": token})
+        r = await spost(self.client, "/api/guest", {"name": name, "skin": 2, "hat": 1, "token": token})  # token 不会被读取
         self.assertEqual(r.status, expect)
         return await r.json()
 
@@ -57,20 +58,22 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         return ws
 
     # ---------- 登录 ----------
-    async def test_token_is_single_use(self):
-        a = await self.login("小明<b>")
-        self.assertTrue(a["user"]["name"].startswith("Guest"))  # 含符号的名字不被接受，改用默认名字
-        # 用 token 恢复同一个账号，并拿到新 token
-        b = await self.login(token=a["token"])
-        self.assertEqual(b["user"]["id"], a["user"]["id"])
-        self.assertNotEqual(b["token"], a["token"])
-        # 旧 token 再用一次 → 拒绝
-        err = await self.login(token=a["token"], expect=401)
-        self.assertEqual(err["code"], "token_invalid")
-        # 新 token 仍然可用（且同样只能用一次）
-        c = await self.login(token=b["token"])
-        self.assertEqual(c["user"]["id"], a["user"]["id"])
-        await self.login(token=b["token"], expect=401)
+    async def test_guest_login_no_token(self):
+        err = await self.login("小明<b>", expect=400)  # 含符号：全局文本规则整条拒绝
+        self.assertEqual(err["code"], "text_invalid")
+        a = await self.login()
+        self.assertNotIn("token", a)  # 不再下发自动登录 token
+        b = await self.login(token="a" * 64)  # token 字段不读取：仍是新建账号
+        self.assertNotEqual(b["user"]["id"], a["user"]["id"])
+
+    async def test_text_rule_on_ws(self):
+        a = await self.login()
+        ws = await self.connect(a)
+        await ws.send_json({"t": "chat", "text": "大家 好 hi"})
+        m = await recv_until(ws, "chat")
+        self.assertEqual(m["text"] if "text" in m else m.get("msg", {}).get("text"), "大家 好 hi")
+        await ws.send_json({"t": "chat", "text": "<script>"})
+        self.assertEqual((await recv_until(ws, "error"))["code"], "text_invalid")
 
     async def test_guest_gets_8_digit_id_and_can_login_by_id(self):
         a = await self.login("新号")
@@ -88,20 +91,6 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         for bad in ["12345678", "abc", "1234567", None]:
             r = await spost(self.client, "/api/login", {"id": bad})
             self.assertEqual(r.status, 404, bad)
-
-    async def test_concurrent_reuse_only_one_wins(self):
-        a = await self.login("并发")
-        rs = await asyncio.gather(*[
-            spost(self.client, "/api/guest", {"token": a["token"]}) for _ in range(5)
-        ])
-        self.assertEqual(sorted(r.status for r in rs), [200, 401, 401, 401, 401])
-
-    async def test_tokens_stored_hashed(self):
-        a = await self.login("哈希")
-        con = await asyncpg.connect(TEST_DSN)
-        n = await con.fetchval("SELECT count(*) FROM login_tokens WHERE token_hash = $1", a["token"])
-        await con.close()
-        self.assertEqual(n, 0)
 
     async def test_session_auth(self):
         a = await self.login("会话")
@@ -140,7 +129,8 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(again["k"], "".join(g.blocks))
         s2 = await recv_until(ws2, "s")
         self.assertTrue(any(p["id"] == a["user"]["id"] for p in s2["p"]))
-        a2 = await self.login(token=a["token"])  # 关闭浏览器后用 token 重新登录
+        r = await spost(self.client, "/api/login", {"id": a["user"]["id"]})  # 关闭浏览器后用 8 位 ID 重新登录
+        a2 = await r.json()
         ws3 = await self.connect(a2)
         self.assertTrue((await recv_until(ws3, "start"))["rejoin"])
 

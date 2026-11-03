@@ -1,15 +1,16 @@
 """玩家名字校验：长度、允许的字符、不雅词与冒充系统提示的词。
 
 规则
-  * 先 trim，内容长度必须大于 0；最多 8 个字。
-  * 只允许文字（任何语言的文字 / 字母）、数字和空格；除空格外的所有符号（括号【】[]「」、标点、
-    下划线、表情符号等）一律不允许，避免伪造「【系统】」之类的提示。
+  * 去掉所有空格后，内容长度必须大于 0；最多 8 个字。
+  * 只允许中文、英文字母和数字（与全局文本规则 textrule.py 一致）；括号【】[]「」、标点、下划线、
+    表情符号、假名等一律不允许，避免伪造「【系统】」之类的提示。
   * 屏蔽词：比对前统一小写、去掉空格与符号，防止「你 妈 的」「f-u-c-k」这类拆字绕过。
 """
 from __future__ import annotations
 
-import re
 import unicodedata
+
+from .textrule import char_ok
 
 NAME_MAX = 8
 
@@ -41,10 +42,10 @@ def _squash(s: str) -> str:
 
 
 def clean_name(name: object) -> str:
-    """去掉控制字符、合并空白、截断到 8 个字。"""
+    """去掉控制字符和所有空白、截断到 8 个字。"""
     s = unicodedata.normalize("NFKC", str(name or ""))
     s = "".join(ch for ch in s if unicodedata.category(ch)[0] != "C")
-    return re.sub(r"\s+", " ", s).strip()[:NAME_MAX]
+    return "".join(s.split())[:NAME_MAX]
 
 
 def check_name(name: object) -> tuple[str, str | None]:
@@ -54,7 +55,7 @@ def check_name(name: object) -> tuple[str, str | None]:
         return s, "name_invalid"
     if len(str(name or "").strip()) > NAME_MAX * 3:  # 明显超长的输入直接拒绝（正常输入框最多 8 个字）
         return s, "name_too_long"
-    if not all(ch == " " or ch.isalnum() for ch in s):  # 文字 / 字母 / 数字 / 空格以外的一律不行
+    if not all(map(char_ok, s)):  # 中文 / 英文字母 / 数字以外的一律不行
         return s, "name_chars"
     flat = _squash(s)
     if any(w in flat for w in _WORDS):

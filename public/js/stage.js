@@ -89,7 +89,8 @@ export class MenuStage {
     this.clockLast = performance.now();
     this.t = 0;
 
-    this.composer = new EffectComposer(r);
+    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开 4× 多重采样
+    this.composer = new EffectComposer(r, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
     this.composer.addPass(new RenderPass(scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.7, 0.55, 0.78);
     this.composer.addPass(this.bloom);

@@ -56,11 +56,13 @@ class Config:
         if cfg.login_github and not (cfg.github_client_id and cfg.github_client_secret):
             print("[config] LOGIN_GITHUB=true 但缺少 GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET，已关闭 GitHub 登录")
             cfg.login_github = False
-        if not cfg.login_guest and not cfg.login_github:
-            # 两种登录方式都没开会导致无人能登录（常见于本地开发），此时退回游客登录
-            print("[config] 警告：LOGIN_GUEST 与 LOGIN_GITHUB 都未开启，已临时开启游客登录。部署时请设置 LOGIN_GITHUB=true")
-            cfg.login_guest = True
         return cfg
+
+    def check(self) -> None:
+        """两种登录方式都没开：没有人能登录，服务器拒绝启动。"""
+        if not self.login_guest and not self.login_github:
+            raise SystemExit("LOGIN_GUEST 与 LOGIN_GITHUB 都未开启，没有人能登录，服务器无法启动。"
+                             "请至少开启一个（LOGIN_GITHUB 还需要 GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET）")
 
     @property
     def allowed_providers(self) -> frozenset[str]:

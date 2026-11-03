@@ -8,12 +8,18 @@ from __future__ import annotations
 LANGS = ("zh", "zh-HK", "ja", "en")
 DEFAULT_LANG = "en"
 
-GUEST_PREFIX = {"zh": "游客", "zh-HK": "訪客", "ja": "ゲスト", "en": "Guest"}
-PLAYER_PREFIX = {"zh": "玩家", "zh-HK": "玩家", "ja": "プレイヤー", "en": "Player"}
-ROOM_NAME = {"zh": "{name}的房间", "zh-HK": "{name}的房間", "ja": "{name}のルーム", "en": "{name}'s room"}
+# 名字只允许中文 / 英文字母 / 数字（见 textrule.py），所以日文默认名用英文
+GUEST_PREFIX = {"zh": "游客", "zh-HK": "訪客", "ja": "Guest", "en": "Guest"}
+PLAYER_PREFIX = {"zh": "玩家", "zh-HK": "玩家", "ja": "Player", "en": "Player"}
+ROOM_NAME = {"zh": "{name}的房间", "zh-HK": "{name}的房間", "ja": "{name}部屋", "en": "{name}Room"}
+
+
+WIRE_LANG = {"zhHK": "zh-HK"}  # 客户端上报时不带连字符（文本规则不允许 -）
 
 
 def normalize(lang: object) -> str | None:
+    if isinstance(lang, str):
+        lang = WIRE_LANG.get(lang, lang)
     return lang if isinstance(lang, str) and lang in LANGS else None
 
 

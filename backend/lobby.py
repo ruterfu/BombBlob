@@ -4,26 +4,34 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-import re
 import time
 from typing import Any
 
 from aiohttp import web
 
-from . import i18n, secure, store
+from . import anticheat, i18n, secure, store, textrule
+from .bot import LEVEL_BAND
+from .bot import level_of as bot_level
 from .game import Game
 from .maps import MAP_IDS, get_map, map_summaries
 
 BOT_NAMES = ["疾风", "赤焰", "幽影", "雷霆", "寒霜", "猎鹰", "夜枭", "铁卫", "游侠", "暴君"]
 MAX_ROOMS = 200
 MAX_PLAYERS = 6  # 每个房间最多 6 人（真人 + 机器人）
-_CTRL = re.compile(r"[\x00-\x1f\x7f]")
-_PASSWORD = re.compile(r"^[A-Za-z0-9]{6}$")  # 房间密码：6 位数字 / 英文
 LEAVE_GRACE = 10.0  # 在房间（未开局）里断线后保留的秒数，超时自动离开
 
 
 def clean_text(s: object, n: int) -> str:
-    return _CTRL.sub("", str(s or "")).strip()[:n]
+    """文本在入口处已按全局规则清理（无空白、只有中文 / 英文字母 / 数字），这里只截断长度。"""
+    return s[:n] if isinstance(s, str) else ""
+
+
+ROUND_MINUTES = (3, 5, 10)  # 可选的时间限制（分钟）
+
+
+def bot_hat(level: str) -> int:
+    """按 AI 难度随机一个对应等级段的头饰。"""
+    return random.choice(store.hats_in_levels(*LEVEL_BAND[level]))
 
 
 def clamp_int(v: object, lo: int, hi: int, default: int) -> int:
@@ -92,7 +100,9 @@ class Room:
         self.name = name
         self.host_id: str | None = None
         self.members: list[dict] = []  # {id,name,skin,hat,isBot,ready,team,connected}
-        self.settings = {"mapId": "meadow", "mode": "ffa", "lives": 2, "maxPlayers": MAX_PLAYERS, "shrink": True}
+        # items：是否掉落道具（针 / 无敌盾牌 / 超级跑鞋 / 透明人 / 腾飞之翼）；time：时间限制（分钟）
+        self.settings = {"mapId": "meadow", "mode": "ffa", "lives": 2, "maxPlayers": MAX_PLAYERS, "shrink": True,
+                         "items": True, "time": 10}
         self.apply_settings(settings)
         self.state = "waiting"
         self.password: str | None = None  # 房间密码（6 位数字 / 英文），只保存在内存
@@ -107,6 +117,10 @@ class Room:
             self.settings["mode"] = s["mode"]
         if isinstance(s.get("shrink"), bool):
             self.settings["shrink"] = s["shrink"]
+        if isinstance(s.get("items"), bool):
+            self.settings["items"] = s["items"]
+        if s.get("time") in ROUND_MINUTES:
+            self.settings["time"] = s["time"]
         if s.get("lives") is not None:
             self.settings["lives"] = clamp_int(s["lives"], 1, 3, 2)
 
@@ -141,7 +155,8 @@ class Room:
         """机器人上限 = 6 - 真人数量（只有 1 个真人时最多 5 个机器人）。"""
         return MAX_PLAYERS - len(self.humans())
 
-    def add_bot(self) -> bool:
+    def add_bot(self, level: object = None) -> bool:
+        """添加 AI；level：easy / normal / hard（简单 / 中等 / 难）。"""
         bots = len(self.members) - len(self.humans())
         if self.state != "waiting" or len(self.members) >= MAX_PLAYERS or bots >= self.bot_limit():
             return False
@@ -151,12 +166,23 @@ class Room:
         free = [s for s in range(store.SKINS) if s not in used_skins] or list(range(store.SKINS))
         self.members.append(
             {
-                "id": f"bot_{self.id}_{self.bot_seq}", "name": name, "skin": random.choice(free),
-                "hat": random.randrange(store.hat_count()), "isBot": True, "ready": True,
+                "id": f"bot{self.id}x{self.bot_seq}", "name": name, "skin": random.choice(free),
+                "hat": bot_hat(bot_level(level)), "isBot": True, "ready": True, "ai": bot_level(level),
                 "team": self.smaller_team(), "connected": True,
             }
         )
         self.bot_seq += 1
+        return True
+
+    def set_bot_level(self, mid: object, level: object) -> bool:
+        """房主修改 AI 难度：形象（头饰）随难度一起换。"""
+        m = self.member(str(mid))
+        if self.state != "waiting" or not m or not m.get("isBot"):
+            return False
+        lv = bot_level(level)
+        if m.get("ai") != lv:
+            m["ai"] = lv
+            m["hat"] = bot_hat(lv)
         return True
 
     def remove_member(self, mid: str) -> None:
@@ -223,12 +249,16 @@ class Room:
             [
                 {"id": m["id"], "name": m["name"], "skin": m["skin"], "hat": m["hat"],
                  "team": m["team"], "is_bot": m["isBot"], "level": m.get("level", 0),
-                 "avatar": m.get("avatar")}
+                 "avatar": m.get("avatar"), "ai": m.get("ai"),
+                 "bomb": "" if m["isBot"] else store.active_bomb(store.cached_user(m["id"]))}
                 for m in self.members
             ],
             broadcast=self.broadcast,
             on_end=self.end_game,
+            on_anomaly=self.lobby.anomaly,
             shrink=self.settings["shrink"],
+            items=self.settings.get("items", True),
+            round_time=60.0 * self.settings.get("time", 10),
         )
         self.broadcast_info()
         self.broadcast(self.game.start_info())
@@ -269,6 +299,7 @@ class Lobby:
         self.lobby_dirty = False
         self.lobby_chat: list[dict] = []
         self.pending_leave: dict[str, asyncio.TimerHandle] = {}  # 房间内断线的宽限计时
+        self.watcher = anticheat.Watcher()  # 异常移动 / 异常放炸弹观察
 
     # ---------- 发送 ----------
     def send_raw(self, uid: str, data: str, droppable: bool = False) -> None:
@@ -278,6 +309,12 @@ class Lobby:
 
     def send_to(self, uid: str, msg: dict) -> None:
         self.send_raw(uid, dumps(msg))
+
+    def anomaly(self, uid: str, kind: str) -> None:
+        """服务器发现客户端异常（移动不合理 / 放炸弹过快）：10 秒观察期内累计 3 次则提醒。"""
+        if self.watcher.report(uid):
+            print(f"[anticheat] {uid} repeated anomalies (last: {kind})")
+            self.send_to(uid, {"t": "warn", "code": "anomaly"})
 
     def room_of(self, uid: str) -> Room | None:
         rid = self.member_room.get(uid)
@@ -315,7 +352,7 @@ class Lobby:
 
         room = self.room_of(user["id"])
         client.send({"t": "welcome", "user": store.public_user(user), "maps": map_summaries(), "levels": store.level_table(),
-                     "shop": store.shop_catalog(), "renameCardPrice": store.RENAME_CARD_PRICE,
+                     "shop": store.shop_catalog(), "renameCardPrice": store.RENAME_CARD_PRICE, "bombShop": store.bomb_shop(),
                      "roomId": room.id if room else None, "inGame": bool(room and room.game)})
         if room:
             m = room.member(user["id"])
@@ -344,8 +381,14 @@ class Lobby:
                     break
                 except ValueError:
                     continue
-                if not isinstance(data, dict) or not isinstance(data.get("t"), str):
+                try:
+                    # 定向取值：按消息类型只取约定的字段；文本去空白，只允许中文 / 英文字母 / 数字
+                    data = textrule.read_ws(data)
+                except textrule.TextError:
+                    client.send({"t": "error", "code": "text_invalid"})
                     continue
+                if data is None:
+                    continue  # 不认识的消息类型
                 try:
                     self.handle(client, data)
                 except Exception:  # noqa: BLE001
@@ -444,7 +487,7 @@ class Lobby:
         self.next_room_id += 1
         name = clean_text(msg.get("name"), 16) or i18n.room_name(client.user.get("lang"), client.user["name"])
         pw = msg.get("password")
-        if pw not in (None, "") and not (isinstance(pw, str) and _PASSWORD.match(pw)):
+        if pw not in (None, "") and not (isinstance(pw, str) and len(pw) == 6 and pw.isascii() and pw.isalnum()):  # 6 位数字 / 英文
             client.send({"t": "error", "code": "room_password_format"})
             return
         room = Room(self, rid, name, msg)
@@ -523,10 +566,13 @@ class Lobby:
             room.broadcast_info()
             self.broadcast_lobby()
         elif t == "addBot" and is_host:
-            if not room.add_bot():
+            if not room.add_bot(msg.get("level")):
                 client.send({"t": "error", "code": "bot_limit", "params": {"max": MAX_PLAYERS, "limit": room.bot_limit()}})
             room.broadcast_info()
             self.broadcast_lobby()
+        elif t == "botLevel" and is_host:
+            if room.set_bot_level(msg.get("id"), msg.get("level")):
+                room.broadcast_info()
         elif t == "kick" and is_host and room.state == "waiting" and msg.get("id") != uid:
             m = room.member(str(msg.get("id")))
             if m:
@@ -551,6 +597,9 @@ class Lobby:
             if room and room.game:
                 room.game.client_move(uid, msg.get("x"), msg.get("y"), facing=msg.get("f"), moving=msg.get("m"),
                                       kick=msg.get("k"), seq=msg.get("q"), epoch=msg.get("e"), ping=msg.get("p"))
+        elif t == "use":
+            if room and room.game:
+                room.game.use_item(uid, msg.get("s"))  # 使用道具栏第 s 格（0–5）
         elif t == "bomb":
             if room and room.game:
                 if msg.get("x") is not None:
@@ -587,7 +636,7 @@ class Lobby:
         except store.ShopError as e:
             client.send({"t": "error", "code": e.code})
             return
-        client.send({"t": "bought", "item": "rename" if item == "rename" else client.user["hat"]})
+        client.send({"t": "bought", "item": item if item == "rename" or item in store.BOMB_STYLES else client.user["hat"]})
         client.send({"t": "me", "user": store.public_user(client.user)})
         room = self.room_of(client.id)
         if room and room.state == "waiting":

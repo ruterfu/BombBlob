@@ -28,6 +28,7 @@ import random
 import re
 import secrets
 import time
+import time
 
 from pathlib import Path
 
@@ -72,6 +73,11 @@ MIN_LOSS_EXP = 5
 WIN_POINTS, KILL_POINTS, RESCUE_POINTS = 10, 2, 2
 # 更名卡：100 点（约 7 场胜利），可叠加，每次改名消耗 1 张
 RENAME_CARD_PRICE = 100
+# 炸弹特效（纯画面，范围 / 威力 / 爆炸时间与普通炸弹完全一样）：每次 200 点，有效 7 天。
+# 同一时间只有一种生效：再次购买（同一种或另一种）会覆盖之前的，有效期从购买时重新算 7 天。
+BOMB_STYLES = ("poison", "water", "gold")  # 毒弹 / 水弹 / 金弹
+BOMB_PRICE = 200
+BOMB_DAYS = 7
 
 # 等级曲线：第 n 级升到 n+1 级需要 100 + 50*(n-1) 经验；levels 表存 1–50 级，之后按同一曲线无限延伸
 MAX_LEVEL = 50  # levels 表的行数（不是上限）
@@ -80,8 +86,8 @@ TIER_MIN_LEVEL = (1, 5, 10, 15, 20, 30, 40)  # 新兵 / 青铜 / 白银 / 黄金
 DEFAULT_HAT_UNLOCK = {0: 1, 1: 2, 3: 3, 4: 5, 5: 8, 2: 12}
 
 
-def default_level_table() -> list[tuple[int, int, int, int | None]]:
-    """[(level, exp_required, tier, unlock_hat)]：写入 levels 表的初始数据。"""
+def default_level_table() -> list[tuple[int, int, int, int]]:
+    """[(level, exp_required, tier, unlock_hat)]：写入 levels 表的初始数据（unlock_hat 0 = 该级不解锁头饰）。"""
     rows = []
     cum = 0
     hat_at = {lv: h for h, lv in DEFAULT_HAT_UNLOCK.items() if lv > 1}
@@ -89,7 +95,7 @@ def default_level_table() -> list[tuple[int, int, int, int | None]]:
         if lv > 1:
             cum += 100 + 50 * (lv - 2)
         tier = max(i for i, m in enumerate(TIER_MIN_LEVEL) if lv >= m)
-        rows.append((lv, cum, tier, hat_at.get(lv)))
+        rows.append((lv, cum, tier, hat_at.get(lv, 0)))
     return rows
 
 
@@ -167,6 +173,13 @@ def hat_allowed(hat: int, level: int, owned: object = ()) -> bool:
     return 0 <= hat < BASE_HATS and level >= HAT_UNLOCK.get(hat, 1)
 
 
+def hats_in_levels(lo: int, hi: int) -> list[int]:
+    """解锁等级在 [lo, hi] 之间的头饰（基础头饰 + 商店装饰），AI 按难度从中随机一个当形象。"""
+    out = [h for h, lv in HAT_UNLOCK.items() if lo <= lv <= hi]
+    out += [i for i, v in SHOP.items() if lo <= v["level"] <= hi]
+    return sorted(out) or [0]
+
+
 def shop_catalog() -> list[dict]:
     return [{"id": i, **v} for i, v in sorted(SHOP.items(), key=lambda kv: (kv[1]["level"], kv[0]))]
 
@@ -189,7 +202,7 @@ async def _load_levels(con) -> None:
     LEVEL_TIER = [r["tier"] for r in rows]
     HAT_UNLOCK = {0: 1}
     for r in rows:
-        if r["unlock_hat"] is not None:
+        if r["unlock_hat"]:  # 0 = 该级不解锁头饰
             HAT_UNLOCK[int(r["unlock_hat"])] = r["level"]
     # 等级规则变化时（校验值不同）才全量同步用户等级，平时启动不扫描 users
     digest = hashlib.sha256(repr([tuple(r) for r in rows]).encode()).hexdigest()
@@ -215,6 +228,10 @@ def is_valid_id(uid: object) -> bool:
 
 _pool: asyncpg.Pool | None = None
 _users: dict[str, dict] = {}  # 内存缓存：id -> user（大厅、房间直接引用同一个 dict）
+
+
+def cached_user(uid: str) -> dict | None:
+    return _users.get(uid)
 _sessions: dict[str, "_Session"] = {}  # 会话 ID -> 会话（含 AES 会话密钥）
 _bg: set[asyncio.Task] = set()
 _NAME_BAD = re.compile(r"[\x00-\x1f\x7f<>&\"'`]")
@@ -252,8 +269,9 @@ async def cleanup_tokens(batch: int = 5000) -> int:
     分批删除（每批一个短事务），避免长时间持锁；两个条件分别命中部分索引。"""
     assert _pool is not None
     total = 0
-    for cond in ("used_at IS NOT NULL AND used_at < now() - interval '30 days'",
-                 "used_at IS NULL AND created_at < now() - interval '180 days'"):
+    # used_at = 'epoch'（1970-01-01）表示尚未使用（数据库不存 NULL）
+    for cond in ("used_at > 'epoch' AND used_at < now() - interval '30 days'",
+                 "used_at = 'epoch' AND created_at < now() - interval '180 days'"):
         while True:
             n = int((await _pool.execute(
                 f"DELETE FROM login_tokens WHERE ctid = ANY(ARRAY(SELECT ctid FROM login_tokens WHERE {cond} LIMIT {int(batch)}))"
@@ -305,9 +323,12 @@ def _row_to_user(row: asyncpg.Record) -> dict:
         "renameCards": row["rename_cards"],
         "hasCharacter": row["has_character"],
         "provider": row["provider"],
-        "githubLogin": row["github_login"],
-        "avatar": row["avatar_url"],
-        "lang": row["lang"],
+        # 数据库里没有值时存 ''，对外仍用 null 表示「没有」
+        "githubLogin": row["github_login"] or None,
+        "avatar": row["avatar_url"] or None,
+        "lang": row["lang"] or None,
+        "bombStyle": row["bomb_style"],
+        "bombUntil": _ms(row["bomb_until"]),
         "stats": {"games": row["games"], "wins": row["wins"], "kills": row["kills"]},
     }
     if u is None:
@@ -324,6 +345,8 @@ def public_user(u: dict) -> dict:
         "stats": dict(u["stats"]), "hatUnlock": HAT_UNLOCK, "items": sorted(u.get("items", ())),
         "provider": u.get("provider", "guest"), "githubLogin": u.get("githubLogin"), "avatar": u.get("avatar"),
         "lang": u.get("lang"),
+        # 炸弹特效：只在有效期内返回（过期后自动恢复普通火焰）
+        "bomb": {"style": active_bomb(u), "until": u.get("bombUntil", 0) if active_bomb(u) else 0},
     }
 
 
@@ -387,12 +410,12 @@ async def guest_login(
     allowed：当前开启的账号类型；账号类型未开启时抛 ProviderDisabled（事务回滚，token 不会被消费）。
     lang：客户端当前语言；新账号或尚未设置语言的账号会记录它。
     """
-    lg = i18n.normalize(lang)
+    lg = i18n.normalize(lang) or ""  # 数据库不存 NULL：未知语言存 ''
     assert _pool is not None, "store.init() 未调用"
     clean, bad = names.check_name(name)
     clean = "" if bad else clean  # 不合规的名字直接改用默认名字
     sk, ht = _clamp(skin, SKINS), _clamp(hat, hat_count())
-    new_token = secrets.token_urlsafe(32)
+    new_token = secrets.token_hex(32)
     created = False
     async with _pool.acquire() as con, con.transaction():
         if uid is not None:
@@ -402,11 +425,11 @@ async def guest_login(
                 raise UnknownId()
             if "guest" not in allowed:
                 raise ProviderDisabled()
-            await con.execute("UPDATE users SET last_seen = now(), lang = COALESCE(lang, $2) WHERE id = $1", uid, lg)
+            await con.execute("UPDATE users SET last_seen = now(), lang = CASE WHEN lang = '' THEN $2 ELSE lang END WHERE id = $1", uid, lg)
         elif token:
             # 原子地消费 token：并发的两个请求只有一个能成功
             uid = await con.fetchval(
-                "UPDATE login_tokens SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL RETURNING user_id",
+                "UPDATE login_tokens SET used_at = now() WHERE token_hash = $1 AND used_at = 'epoch' RETURNING user_id",
                 _hash(str(token)),
             )
             if uid is None:
@@ -415,7 +438,7 @@ async def guest_login(
                 raise ProviderDisabled()
             await con.execute(
                 """UPDATE users SET skin = COALESCE($2, skin),
-                   hat = COALESCE($3, hat), lang = COALESCE(lang, $4), last_seen = now() WHERE id = $1""",
+                   hat = COALESCE($3, hat), lang = CASE WHEN lang = '' THEN $4 ELSE lang END, last_seen = now() WHERE id = $1""",
                 uid, sk,
                 ht if ht is not None and hat_allowed(
                     ht, level_of(await con.fetchval("SELECT exp FROM users WHERE id = $1", uid)), await _owned(con, uid)) else None,
@@ -447,15 +470,16 @@ async def guest_login(
 async def github_login(gh_id: int, avatar: str | None = None, lang: object = None) -> tuple[dict, str, str, bool]:
     """GitHub 账号登录：按 GitHub 用户 ID 查找或创建账号，只额外保存头像地址（不保存用户名），签发一次性 token 与会话。"""
     assert _pool is not None, "store.init() 未调用"
-    new_token = secrets.token_urlsafe(32)
+    new_token = secrets.token_hex(32)
     created = False
-    lg = i18n.normalize(lang)
+    lg = i18n.normalize(lang) or ""  # 数据库不存 NULL
+    avatar = avatar or ""
     async with _pool.acquire() as con, con.transaction():
         uid = await con.fetchval("SELECT id FROM users WHERE github_id = $1", int(gh_id))
         if uid:
             # 每次登录刷新头像（用户可能在 GitHub 换了头像）
             await con.execute(
-                "UPDATE users SET github_login = NULL, avatar_url = $2, lang = COALESCE(lang, $3), last_seen = now() WHERE id = $1",
+                "UPDATE users SET github_login = '', avatar_url = $2, lang = CASE WHEN lang = '' THEN $3 ELSE lang END, last_seen = now() WHERE id = $1",
                 uid, avatar, lg,
             )
         else:
@@ -488,10 +512,50 @@ class ShopError(Exception):
         self.code = code
 
 
+async def _buy_bomb(u: dict, style: str) -> dict:
+    """购买炸弹特效：扣点数并覆盖当前特效，有效期 = 现在 + 7 天（并发安全：点数条件写在 UPDATE 里）。"""
+    assert _pool is not None
+    if u.get("points", 0) < BOMB_PRICE:
+        raise ShopError("item_points")
+    async with _pool.acquire() as con, con.transaction():
+        row = await con.fetchrow(
+            """UPDATE users SET points = points - $2, bomb_style = $3, bomb_until = now() + make_interval(days => $4)
+               WHERE id = $1 AND points >= $2 RETURNING points, bomb_style, bomb_until""",
+            u["id"], BOMB_PRICE, style, BOMB_DAYS,
+        )
+        if row is None:
+            raise ShopError("item_points")
+        await con.execute(
+            "INSERT INTO bomb_purchases (user_id, style, price_paid, expires_at) VALUES ($1, $2, $3, $4)",
+            u["id"], style, BOMB_PRICE, row["bomb_until"],
+        )
+    u["points"] = row["points"]
+    u["bombStyle"], u["bombUntil"] = row["bomb_style"], _ms(row["bomb_until"])
+    return u
+
+
+def _ms(ts) -> int:
+    """时间 → 毫秒时间戳（'epoch' 即 0 表示没有）。"""
+    return int(ts.timestamp() * 1000) if ts is not None else 0
+
+
+def active_bomb(u: dict | None) -> str:
+    """当前生效的炸弹特效；过期或没买返回 ''（普通火焰）。"""
+    if not u or u.get("bombStyle") not in BOMB_STYLES:
+        return ""
+    return u["bombStyle"] if u.get("bombUntil", 0) > time.time() * 1000 else ""
+
+
+def bomb_shop() -> dict:
+    return {"styles": list(BOMB_STYLES), "price": BOMB_PRICE, "days": BOMB_DAYS}
+
+
 async def buy_item(u: dict, item: object) -> dict:
     """购买装饰：在一个事务里检查等级、扣点数、记录拥有，成功后自动装备。
     并发安全：points >= price 条件写在 UPDATE 里，主键冲突防止重复购买。"""
     assert _pool is not None
+    if item in BOMB_STYLES:
+        return await _buy_bomb(u, str(item))
     if item == "rename":
         if u.get("points", 0) < RENAME_CARD_PRICE:
             raise ShopError("item_points")
@@ -631,7 +695,7 @@ def update_profile(u: dict, name: object = None, skin: object = None, hat: objec
 
 async def _save_profile(uid: str, name: str, skin: int, hat: int, lang: str | None) -> None:
     assert _pool is not None
-    await _pool.execute("UPDATE users SET name=$2, skin=$3, hat=$4, lang=$5 WHERE id=$1", uid, name, skin, hat, lang)
+    await _pool.execute("UPDATE users SET name=$2, skin=$3, hat=$4, lang=$5 WHERE id=$1", uid, name, skin, hat, lang or "")
 
 
 def record_match(result: dict) -> None:
@@ -664,15 +728,27 @@ def record_match(result: dict) -> None:
     _spawn(functools.partial(_save_match, result, humans))
 
 
+def _no_null(v: object, key: str = "") -> object:
+    """写进 JSONB 前把 null 换掉：winnerTeam → -1（0 是红队），其他 → ''。"""
+    if v is None:
+        return -1 if key == "winnerTeam" else ""
+    if isinstance(v, dict):
+        return {k: _no_null(x, k) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_no_null(x) for x in v]
+    return v
+
+
 async def _save_match(result: dict, humans: list[dict]) -> None:
     """单个事务内写入对局、玩家战绩与用户统计。match_key 保证重试时不会重复结算。"""
     assert _pool is not None
     async with _pool.acquire() as con, con.transaction():
         match_id = await con.fetchval(
             """INSERT INTO matches (match_key, map_id, mode, duration, winner_team, result)
-               VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (match_key) WHERE match_key IS NOT NULL DO NOTHING RETURNING id""",
-            result["matchKey"], result["mapId"], result["mode"], int(result["duration"]), result["winnerTeam"],
-            json.dumps(result, ensure_ascii=False),
+               VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (match_key) WHERE match_key <> '' DO NOTHING RETURNING id""",
+            result["matchKey"], result["mapId"], result["mode"], int(result["duration"]),
+            -1 if result["winnerTeam"] is None else int(result["winnerTeam"]),  # -1 = 没有获胜队伍（0 是红队）
+            json.dumps(_no_null(result), ensure_ascii=False),
         )
         if match_id is None:
             return  # 已经写入过（上一次提交成功但确认丢失）
@@ -707,7 +783,7 @@ async def leaderboard(limit: int = 20) -> list[dict]:
     )
     return [
         {"id": r["id"], "name": r["name"], "skin": r["skin"], "hat": r["hat"],
-         "exp": r["exp"], "level": r["level"], "avatar": r["avatar_url"],
+         "exp": r["exp"], "level": r["level"], "avatar": r["avatar_url"] or None,
          "stats": {"games": r["games"], "wins": r["wins"], "kills": r["kills"]}}
         for r in rows
     ]
@@ -737,7 +813,8 @@ async def match_history(uid: str, limit: int = 30) -> list[dict]:
             "duration": r["duration"], "draw": bool(res.get("draw")), "win": r["win"], "quit": bool(me.get("quit")),
             "place": r["place"], "kills": r["kills"], "rescues": r["rescues"],
             "exp": r["exp_gained"], "points": r["points_gained"], "level": r["level_after"],
-            "players": [{**p, "id": None if p["isBot"] else p["id"], "me": p["id"] == uid} for p in players],
+            "players": [{**p, "id": None if p["isBot"] else p["id"], "avatar": p.get("avatar") or None, "me": p["id"] == uid}
+                        for p in players],
         })
     return out
 

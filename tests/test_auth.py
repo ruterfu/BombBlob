@@ -34,7 +34,7 @@ class FakeGitHub(GitHubOAuth):
 class AuthTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         con = await asyncpg.connect(TEST_DSN)
-        await con.execute("DROP TABLE IF EXISTS user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
+        await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
         await con.close()
         self.clients = []
 
@@ -68,20 +68,22 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     def test_name_rules(self):
         from backend.names import check_name
-        ok = ["疾风小队", "Blob01", "夜行者", "ゲスト1234", "小明 二号", "  前后空格  "]
+        ok = ["疾风小队", "Blob01", "夜行者", "Guest1234", "小明 二号", "  前后空格  "]
         for n in ok:
             self.assertIsNone(check_name(n)[1], n)
         bad = {
             "【你妈的】": "name_chars", "[GM]": "name_chars", "a<b>": "name_chars", "哈😀": "name_chars",
             "你妈的": "name_forbidden", "你 妈 的": "name_forbidden", "f-u-c-k": "name_chars", "f u c k": "name_forbidden", "ＦＵＣＫ": "name_forbidden",
             "断开连接": "name_forbidden", "重新連線": "name_forbidden", "系统": "name_forbidden", "Admin": "name_forbidden",
-            "仆街": "name_forbidden", "死ね": "name_forbidden", "  ": "name_invalid", "": "name_invalid",
+            "仆街": "name_forbidden", "死ね": "name_chars", "  ": "name_invalid", "": "name_invalid",
             "Blob_01": "name_chars", "A·B-C": "name_chars", "hi!": "name_chars", "a.b": "name_chars",
+            "ゲスト": "name_chars", "Café": "name_chars", "한글": "name_chars", "，": "name_chars",
         }
         for n, code in bad.items():
             self.assertEqual(check_name(n)[1], code, n)
         self.assertEqual(check_name("一二三四五六七八九十")[0], "一二三四五六七八")  # 最多 8 个字
         self.assertEqual(check_name("  前后空格  ")[0], "前后空格")  # 先 trim
+        self.assertEqual(check_name("小明 二号")[0], "小明二号")  # 空格全部去掉
 
     def test_new_ids_never_contain_4(self):
         from backend.store import is_valid_id, new_user_id
@@ -104,7 +106,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({"t": "createCharacter", "name": "  ", "skin": 1, "hat": 0})
         self.assertEqual((await self._reply(ws, "error"))["code"], "name_invalid")
         await ws.send_json({"t": "createCharacter", "name": "【你妈的】断开连接", "skin": 1, "hat": 0})
-        self.assertEqual((await self._reply(ws, "error"))["code"], "name_chars")
+        self.assertEqual((await self._reply(ws, "error"))["code"], "text_invalid")  # 全局文本规则先拦下
         await ws.send_json({"t": "createCharacter", "name": "系统公告", "skin": 1, "hat": 0})
         self.assertEqual((await self._reply(ws, "error"))["code"], "name_forbidden")
         await ws.send_json({"t": "createCharacter", "name": "疾风小队", "skin": 3, "hat": 2})  # 王冠未解锁 → 无头饰
@@ -116,7 +118,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({"t": "createRoom", "name": "x"})
         self.assertEqual((await self._reply(ws, "room", "error"))["t"], "room")
         # 重新登录后直接是已有角色
-        d2 = await (await spost(c, "/api/guest", {"token": d["token"]})).json()
+        d2 = await (await spost(c, "/api/login", {"id": d["user"]["id"]})).json()
         self.assertTrue(d2["user"]["hasCharacter"])
         self.assertEqual(d2["user"]["name"], "疾风小队")
 
@@ -129,25 +131,24 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_config_endpoint(self):
         c, _ = await self.make(guest=False, github=True)
-        self.assertEqual(await (await c.get("/api/config")).json(), {"guest": False, "github": True})
+        self.assertEqual(await (await c.get("/login-info")).json(), {"guest": False, "github": True})
 
     async def test_guest_disabled_blocks_guest_and_id_login(self):
         c, _ = await self.make(guest=False, github=True)
-        r = await spost(c, "/api/guest", {"name": "x"})
-        self.assertEqual(r.status, 403)
-        r = await spost(c, "/api/login", {"id": "12345678"})
-        self.assertEqual(r.status, 403)
+        # 游客登录关闭：两个接口直接 404（连解密都不做）
+        for path in ("/api/guest", "/api/login"):
+            self.assertEqual((await c.post(path, json={})).status, 404, path)
 
-    async def test_guest_token_rejected_when_guest_disabled_and_not_consumed(self):
+    async def test_no_token_auto_login(self):
+        # 不再下发 token；带 token 请求 /api/guest 也只会新建游客账号（token 字段不读取）
         on, _ = await self.make(guest=True, github=True)
-        tok = (await (await spost(on, "/api/guest", {"name": "旧游客"})).json())["token"]
+        d = await (await spost(on, "/api/guest", {"name": "旧游客"})).json()
+        self.assertNotIn("token", d)
+        d2 = await (await spost(on, "/api/guest", {"token": "a" * 64})).json()
+        self.assertTrue(d2["created"])
+        self.assertNotEqual(d2["user"]["id"], d["user"]["id"])
         off, _ = await self.make(guest=False, github=True)
-        r = await spost(off, "/api/guest", {"token": tok})
-        self.assertEqual(r.status, 403)
-        self.assertEqual((await r.json())["code"], "provider_disabled")
-        # 被拒时 token 不会被消费：游客登录重新开启后仍可使用
-        r = await spost(on, "/api/guest", {"token": tok})
-        self.assertEqual(r.status, 200)
+        self.assertEqual((await off.post("/api/guest", json={})).status, 404)
 
     async def test_github_full_flow(self):
         c, _ = await self.make(guest=False, github=True)
@@ -165,13 +166,14 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         con = await asyncpg.connect(TEST_DSN)
         row = await con.fetchrow("SELECT github_id, github_login, avatar_url FROM users WHERE id = $1", d["user"]["id"])
         await con.close()
-        self.assertEqual(tuple(row), (424242, None, avatar))
+        self.assertEqual(tuple(row), (424242, "", avatar))  # 数据库不存 NULL：没有值存 ''
         self.assertRegex(d["user"]["id"], r"^\d{8}$")
         # 交换码只能用一次
         self.assertEqual((await spost(c, "/api/oauth/exchange", {"code": code})).status, 401)
-        # 一次性 token 自动登录 GitHub 账号（游客登录关闭也可以）
-        r = await spost(c, "/api/guest", {"token": d["token"]})
-        self.assertEqual(r.status, 200)
+        # 不下发 token：GitHub 账号每次都要重新授权
+        self.assertNotIn("token", d)
+        # 再授权一次 → 回到同一个账号
+        r = await spost(c, "/api/oauth/exchange", {"code": await self.github_login(c)})
         self.assertEqual((await r.json())["user"]["id"], d["user"]["id"])
         # session 可以连 WebSocket
         ws = await sws(c, d)
@@ -198,14 +200,15 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_github_disabled(self):
         c, _ = await self.make(guest=True, github=False)
-        r = await c.get("/auth/github", allow_redirects=False)
-        self.assertIn("oauth_error=disabled", r.headers["Location"])
-        self.assertEqual((await spost(c, "/api/oauth/exchange", {"code": "x"})).status, 403)
+        # GitHub 登录关闭：相关接口直接 404
+        self.assertEqual((await c.get("/auth/github", allow_redirects=False)).status, 404)
+        self.assertEqual((await c.get("/oauth/callback?code=x&state=y", allow_redirects=False)).status, 404)
+        self.assertEqual((await c.post("/api/oauth/exchange", json={})).status, 404)
 
     async def test_rest_errors_have_code_only(self):
-        c, _ = await self.make(guest=False, github=True)
+        c, _ = await self.make(guest=True, github=True)
         r = await spost(c, "/api/login", {"id": "12345678"})
-        self.assertEqual(await r.json(), {"code": "guest_disabled"})
+        self.assertEqual(await r.json(), {"code": "unknown_id"})
         r = await c.post("/api/login", json={"id": "12345678"})  # 未加密的请求
         self.assertEqual(await r.json(), {"code": "bad_request"})
 
@@ -213,11 +216,13 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         c, _ = await self.make(guest=True, github=True)
         d = await (await spost(c, "/api/guest", {"lang": "ja"})).json()
         self.assertEqual(d["user"]["lang"], "ja")
-        self.assertTrue(d["user"]["name"].startswith("ゲスト"))
+        self.assertTrue(d["user"]["name"].startswith("Guest"))  # 名字只允许中文 / 英文字母 / 数字
         # 修改语言 → 写回该账号记录
         ws = await sws(c, d)
         await ws.receive_json()
-        await ws.send_json({"t": "profile", "lang": "zh-HK"})
+        await ws.send_json({"t": "profile", "lang": "zh-HK"})  # 含 - ：整条拒绝
+        self.assertEqual((await self._reply(ws, "error"))["code"], "text_invalid")
+        await ws.send_json({"t": "profile", "lang": "zhHK"})  # 客户端上报用 zhHK
         while (m := await ws.receive_json())["t"] != "me":
             pass
         self.assertEqual(m["user"]["lang"], "zh-HK")
@@ -232,7 +237,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await con.fetchval("SELECT lang FROM users WHERE id = $1", d["user"]["id"]), "zh-HK")
         await con.close()
         # 账号已有语言时，登录时客户端的语言不会覆盖它
-        d2 = await (await spost(c, "/api/guest", {"token": d["token"], "lang": "en"})).json()
+        d2 = await (await spost(c, "/api/login", {"id": d["user"]["id"], "lang": "en"})).json()
         self.assertEqual(d2["user"]["lang"], "zh-HK")
 
     async def test_github_lang_from_state(self):
@@ -313,7 +318,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
     async def test_coins_merged_into_points(self):
         """旧库里的金币按 5:1 并入点数，金币列被删除，排行榜索引按新定义重建。"""
         con = await asyncpg.connect(TEST_DSN)
-        await con.execute("DROP TABLE IF EXISTS user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
+        await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
         await con.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, skin SMALLINT NOT NULL DEFAULT 0, hat SMALLINT NOT NULL DEFAULT 0, "
                           "exp INTEGER NOT NULL DEFAULT 0, coins INTEGER NOT NULL DEFAULT 0, games INTEGER NOT NULL DEFAULT 0, "
                           "wins INTEGER NOT NULL DEFAULT 0, kills INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
@@ -403,7 +408,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         c, _ = await self.make(guest=True, github=False)
         d = await (await spost(c, "/api/guest", {"name": "初始名"})).json()
         self.assertEqual(d["user"]["name"], "初始名")
-        d2 = await (await spost(c, "/api/guest", {"token": d["token"], "name": "换个名"})).json()
+        d2 = await (await spost(c, "/api/login", {"id": d["user"]["id"], "name": "换个名"})).json()
         self.assertEqual(d2["user"]["name"], "初始名")
 
     async def _shop_user(self, c, exp, points):
@@ -422,6 +427,38 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         while (m := await ws.receive_json())["t"] not in types:
             pass
         return m
+
+    async def test_bomb_style_purchase(self):
+        import time as _t
+        c, _ = await self.make(guest=True, github=False)
+        uid, ws, welcome = await self._shop_user(c, 0, 450)
+        self.assertEqual(welcome["bombShop"], {"styles": ["poison", "water", "gold"], "price": 200, "days": 7})
+        self.assertEqual(welcome["user"]["bomb"], {"style": "", "until": 0})
+        # 买毒弹：扣 200 点，立即生效 7 天
+        await ws.send_json({"t": "buy", "item": "poison"})
+        me = (await self._reply(ws, "me"))["user"]
+        self.assertEqual((me["points"], me["bomb"]["style"]), (250, "poison"))
+        week = 7 * 86400 * 1000
+        self.assertLess(abs(me["bomb"]["until"] - (_t.time() * 1000 + week)), 60_000)
+        # 再买水弹：覆盖毒弹，有效期从现在重新算 7 天
+        await ws.send_json({"t": "buy", "item": "water"})
+        me = (await self._reply(ws, "me"))["user"]
+        self.assertEqual((me["points"], me["bomb"]["style"]), (50, "water"))
+        # 点数不足
+        await ws.send_json({"t": "buy", "item": "gold"})
+        self.assertEqual((await self._reply(ws, "error"))["code"], "item_points")
+        con = await asyncpg.connect(TEST_DSN)
+        try:
+            row = await con.fetchrow("SELECT points, bomb_style FROM users WHERE id = $1", uid)
+            self.assertEqual(tuple(row), (50, "water"))
+            self.assertEqual(await con.fetchval("SELECT count(*) FROM bomb_purchases WHERE user_id = $1", uid), 2)
+        finally:
+            await con.close()
+        # 过期：自动恢复普通火焰
+        from backend import store
+        store._users[uid]["bombUntil"] = int(_t.time() * 1000) - 1
+        self.assertEqual(store.public_user(store._users[uid])["bomb"], {"style": "", "until": 0})
+        await ws.close()
 
     async def test_shop_purchase_rules(self):
         c, _ = await self.make(guest=True, github=False)
@@ -492,13 +529,13 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         con = await asyncpg.connect(TEST_DSN)
         await con.execute(
             """INSERT INTO login_tokens (token_hash, user_id, created_at, used_at)
-               SELECT md5(g::text), $1, now() - interval '200 days', CASE WHEN g % 2 = 0 THEN now() - interval '40 days' END
+               SELECT md5(g::text), $1, now() - interval '200 days', CASE WHEN g % 2 = 0 THEN now() - interval '40 days' ELSE 'epoch' END
                FROM generate_series(1, 1200) g""", d["user"]["id"])
         await con.close()
         from backend import store
         self.assertEqual(await store.cleanup_tokens(batch=100), 1200)
-        # 当前有效的 token 不受影响
-        self.assertEqual((await spost(c, "/api/guest", {"token": d["token"]})).status, 200)
+        # 账号本身不受影响
+        self.assertEqual((await spost(c, "/api/login", {"id": d["user"]["id"]})).status, 200)
 
     def test_env_defaults(self):
         for k in ("LOGIN_GUEST", "LOGIN_GITHUB", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"):
@@ -510,9 +547,74 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(cfg.login_guest, "未设置 LOGIN_GUEST 时不允许游客 / ID 登录")
             os.environ["LOGIN_GUEST"] = "true"
             self.assertTrue(Config.from_env().login_guest)
+            # 两个都关闭：无法启动
+            os.environ["LOGIN_GUEST"] = "false"
+            os.environ["LOGIN_GITHUB"] = "false"
+            with self.assertRaises(SystemExit):
+                Config.from_env().check()
         finally:
             for k in ("LOGIN_GUEST", "LOGIN_GITHUB", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"):
                 os.environ.pop(k, None)
+
+
+class NoNullTests(unittest.IsolatedAsyncioTestCase):
+    async def test_all_columns_not_null(self):
+        from backend import store
+        con = await asyncpg.connect(TEST_DSN)
+        try:
+            await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users, name_changes CASCADE")
+        finally:
+            await con.close()
+        await store.init(TEST_DSN)
+        try:
+            con = await asyncpg.connect(TEST_DSN)
+            try:
+                rows = await con.fetch(
+                    """SELECT table_name, column_name FROM information_schema.columns
+                       WHERE table_schema = current_schema() AND is_nullable = 'YES'
+                         AND table_name IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema())""")
+                self.assertEqual([tuple(r) for r in rows], [], "所有字段都必须 NOT NULL")
+            finally:
+                await con.close()
+        finally:
+            await store.close()
+
+    async def test_old_nullable_schema_migrated(self):
+        # 旧库：列可为空且有 NULL 数据 → 启动时自动改成 '' / 0 / 'epoch' / -1 并加 NOT NULL
+        from backend import store
+        con = await asyncpg.connect(TEST_DSN)
+        try:
+            await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users, name_changes CASCADE")
+            await con.execute("""
+                CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, skin SMALLINT NOT NULL DEFAULT 0,
+                    hat SMALLINT NOT NULL DEFAULT 0, games INTEGER NOT NULL DEFAULT 0, wins INTEGER NOT NULL DEFAULT 0,
+                    kills INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_seen TIMESTAMPTZ NOT NULL DEFAULT now(), github_id BIGINT, github_login TEXT,
+                    avatar_url TEXT, lang TEXT);
+                CREATE UNIQUE INDEX users_github_id ON users (github_id) WHERE github_id IS NOT NULL;
+                INSERT INTO users (id, name) VALUES ('12345678', 'a'), ('23456789', 'b');
+                CREATE TABLE login_tokens (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), used_at TIMESTAMPTZ);
+                INSERT INTO login_tokens (token_hash, user_id) VALUES ('h', '12345678');
+                CREATE TABLE matches (id BIGSERIAL PRIMARY KEY, map_id TEXT NOT NULL, mode TEXT NOT NULL,
+                    duration INTEGER NOT NULL, winner_team INTEGER, result JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), match_key TEXT);
+                CREATE UNIQUE INDEX matches_key ON matches (match_key) WHERE match_key IS NOT NULL;
+                INSERT INTO matches (map_id, mode, duration, result) VALUES ('meadow', 'ffa', 60, '{}'), ('meadow', 'ffa', 60, '{}');
+            """)
+        finally:
+            await con.close()
+        await store.init(TEST_DSN)
+        await store.close()
+        con = await asyncpg.connect(TEST_DSN)
+        try:
+            u = await con.fetchrow("SELECT github_id, github_login, avatar_url, lang FROM users WHERE id = '12345678'")
+            self.assertEqual(tuple(u), (0, "", "", ""))
+            self.assertEqual(str((await con.fetchval("SELECT used_at FROM login_tokens"))).startswith("1970-01-01"), True)
+            self.assertEqual(await con.fetchval("SELECT array_agg(DISTINCT winner_team) FROM matches"), [-1])
+            self.assertEqual(await con.fetchval("SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() AND is_nullable = 'YES' AND table_name IN ('users', 'login_tokens', 'matches', 'levels')"), 0)
+        finally:
+            await con.close()
 
 
 if __name__ == "__main__":

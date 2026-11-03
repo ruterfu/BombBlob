@@ -1,19 +1,22 @@
-// 游客登录（一次性 token）+ WebSocket 实时通信（自动重连）
+// 登录（游客 / 8 位 ID / GitHub）+ WebSocket 实时通信（自动重连）
 //
-// localStorage 里只保存一个「一次性登录 token」。每次用它登录后，服务器都会作废它
-// 并返回一个新的 token，我们立刻覆盖保存。
+// 不做自动登录：localStorage 不保存任何登录凭证，只记住上次的 8 位游客 ID，
+// 下次打开时填回输入框，仍然要玩家自己点「登录」。GitHub 每次都要授权一次。
 // 登录请求与响应经过 RSA + AES-128-GCM 加密；登录后拿到的 AES-128 会话密钥只存在内存中，
 // WebSocket 上的所有消息都用它加密（见 secure.js）。
 import { sealedPost, Channel, cryptoAvailable } from './secure.js';
 
-const TOKEN_KEY = 'bb_token';
+const LAST_ID_KEY = 'bb_last_id';
+localStorage.removeItem('bb_token'); // 清掉旧版本保存的自动登录 token
 
-export function savedToken() {
-  return localStorage.getItem(TOKEN_KEY);
+/** 上次登录的 8 位游客 ID（只用于填回输入框） */
+export function savedId() {
+  const id = localStorage.getItem(LAST_ID_KEY) || '';
+  return id.length === 8 && [...id].every((c) => c >= '0' && c <= '9') ? id : '';
 }
 
-export function forgetToken() {
-  localStorage.removeItem(TOKEN_KEY);
+function rememberId(user) {
+  if (user?.provider === 'guest') localStorage.setItem(LAST_ID_KEY, user.id);
 }
 
 /** 服务器返回的错误：只有错误码（code），文字由 i18n 翻译 */
@@ -24,13 +27,39 @@ export class ApiError extends Error {
     this.status = status;
   }
 }
-export class TokenInvalidError extends ApiError {}
 export class UnknownIdError extends ApiError {}
+
+/** 全局文本规则（与服务器 backend/textrule.py 一致）：去掉所有空白后，只能是中文、英文字母、数字 */
+function charOk(ch) {
+  const o = ch.codePointAt(0);
+  return (o >= 0x30 && o <= 0x39) || (o >= 0x41 && o <= 0x5a) || (o >= 0x61 && o <= 0x7a)
+    || (o >= 0x4e00 && o <= 0x9fff) || (o >= 0x3400 && o <= 0x4dbf) || (o >= 0xf900 && o <= 0xfaff)
+    || (o >= 0x20000 && o <= 0x323af);
+}
+/** 去掉所有空白（空格、全角空格、换行……） */
+export const stripSpaces = (s) => Array.from(String(s ?? '').normalize('NFKC')).filter((ch) => ch.trim() !== '').join('');
+/** 公开聊天消息：允许空格（连续空白合并成一个、去掉首尾）；含不允许的字符时返回 null */
+export function cleanChat(s) {
+  const v = String(s ?? '').normalize('NFKC').split(/\s+/u).filter(Boolean).join(' ');
+  return Array.from(v).every((ch) => ch === ' ' || charOk(ch)) ? v : null;
+}
+/** 返回清理后的文本；含不允许的字符时返回 null */
+export function cleanText(s) {
+  const v = stripSpaces(s);
+  return Array.from(v).every(charOk) ? v : null;
+}
+
+/** 上报前把协议值转成符合文本规则的形式：zh-HK → zhHK */
+function wire(msg) {
+  if (typeof msg.lang === 'string' && msg.lang.includes('-')) msg = { ...msg, lang: wireLang(msg.lang) };
+  return msg;
+}
+export const wireLang = (l) => String(l || '').split('-').join('');
 
 async function postJson(url, body) {
   if (!cryptoAvailable()) throw new ApiError('insecure_context', 0);
   try {
-    const { status, data } = await sealedPost(url, body);
+    const { status, data } = await sealedPost(url, wire(body));
     return { r: { ok: status >= 200 && status < 300, status }, data };
   } catch (e) {
     if (e instanceof ApiError) throw e;
@@ -38,15 +67,12 @@ async function postJson(url, body) {
   }
 }
 
-export async function guestLogin({ name, skin, hat, token, lang }) {
-  const { r, data } = await postJson('/api/guest', { name, skin, hat, token, lang });
-  if (data.code === 'token_invalid' || data.code === 'provider_disabled') {
-    forgetToken();
-    throw new TokenInvalidError(data.code, r.status);
-  }
+/** 新建游客账号 */
+export async function guestLogin({ name, skin, hat, lang }) {
+  const { r, data } = await postJson('/api/guest', { name, skin, hat, lang });
   if (!r.ok) throw new ApiError(data.code || 'unknown', r.status);
-  localStorage.setItem(TOKEN_KEY, data.token); // 旧 token 已失效，保存新的
-  return data; // { token, session, user }
+  rememberId(data.user);
+  return data; // { session, key, user }
 }
 
 /** 凭 8 位 ID 登录已有的游客账号 */
@@ -54,13 +80,13 @@ export async function idLogin(id, lang) {
   const { r, data } = await postJson('/api/login', { id, lang });
   if (data.code === 'unknown_id') throw new UnknownIdError(data.code, r.status);
   if (!r.ok) throw new ApiError(data.code || 'unknown', r.status);
-  localStorage.setItem(TOKEN_KEY, data.token);
+  rememberId(data.user);
   return data;
 }
 
-/** 服务器开启了哪些登录方式：{ guest, github } */
+/** 服务器开启了哪些登录方式：{ guest, github }（进入登录页时请求 /login-info） */
 export async function fetchLoginConfig() {
-  const r = await fetch('/api/config');
+  const r = await fetch('/login-info');
   return r.json();
 }
 
@@ -68,7 +94,6 @@ export async function fetchLoginConfig() {
 export async function oauthExchange(code) {
   const { r, data } = await postJson('/api/oauth/exchange', { code });
   if (!r.ok) throw new ApiError(data.code || 'unknown', r.status);
-  localStorage.setItem(TOKEN_KEY, data.token);
   return data;
 }
 
@@ -155,7 +180,7 @@ export class Connection {
   send(msg) {
     const ws = this.ws, ch = this.channel;
     if (!ws || ws.readyState !== WebSocket.OPEN || !ch) return;
-    const p = ch.seal(JSON.stringify(msg)); // 序号在此同步分配
+    const p = ch.seal(JSON.stringify(msg.lang ? wire(msg) : msg)); // 序号在此同步分配
     this.tx = this.tx.then(() => p).then((buf) => {
       if (this.ws === ws && ws.readyState === WebSocket.OPEN) ws.send(buf);
     }).catch(() => {});

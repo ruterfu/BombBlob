@@ -94,7 +94,14 @@ export const POWERUPS = {
   slow: { icon: 'shoe', name: '绿色跑鞋 · 速度 -5%', color: '#2fd06a' },
   kick: { icon: 'kick', name: '踢弹', color: '#c9a04a' },
   shield: { icon: 'shield', name: '护盾 · 免疫一次伤害', color: '#4fb3ff' },
+  // 道具（放进道具栏，按 1–6 使用）
+  needle: { icon: 'needle', name: '针', color: '#e6edf7', item: true },
+  ishield: { icon: 'shield', name: '无敌盾牌', color: '#ffcf3a', item: true },
+  boots: { icon: 'shoe', name: '超级跑鞋', color: '#36d6ff', item: true },
+  ghost: { icon: 'ghost', name: '透明人', color: '#b9a8ff', item: true },
+  wings: { icon: 'wings', name: '腾飞之翼', color: '#9ff0d8', item: true },
 };
+export const ITEM_SLOTS = 6;
 
 /** 威力（每个方向的格数）→ 十字覆盖尺寸，例如 1 → "3×3" */
 export const powerSize = (r) => `${2 * r + 1}×${2 * r + 1}`;
@@ -506,3 +513,10 @@ export function drawMapPreview(canvas, map) {
   ctx.fillStyle = v;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
+
+/** 商店炸弹特效（纯画面：范围 / 威力 / 爆炸时间与普通炸弹完全一样） */
+export const BOMB_FX = {
+  poison: { body: '#3a1652', metal: 0.35, rough: 0.35, glow: '#b14dff', base: 0.35, outer: '#9a3cff', inner: '#e4bcff', light: '#a64dff', parts: ['#9a3cff', '#c77dff', '#6a1fb8', '#9bff6a'] },
+  water: { body: '#14508f', metal: 0.2, rough: 0.12, glow: '#4cc2ff', base: 0.3, outer: '#2f8cff', inner: '#c8f0ff', light: '#3aa8ff', parts: ['#5cc8ff', '#bfeaff', '#2f8cff', '#ffffff'] },
+  gold: { body: '#c9971a', metal: 1, rough: 0.16, glow: '#ffd23f', base: 0.45, outer: '#ffbf00', inner: '#ffe68a', light: '#ffcf3a', parts: ['#ffd84a', '#fff3b0', '#ffb300', '#ffffff'] },
+};

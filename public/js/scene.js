@@ -6,7 +6,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { SKINS, THEMES, POWERUPS, TEAM_COLORS, shade } from './themes.js';
+import { SKINS, THEMES, POWERUPS, TEAM_COLORS, BOMB_FX, shade } from './themes.js';
 import { drawIcon } from './icons.js';
 import { Predictor } from './predict.js';
 
@@ -300,10 +300,12 @@ function powerupTexture(type) {
       }
       ctx.closePath();
     };
-    hex(58);
+    // 道具（放进道具栏的）用圆形徽章，普通加成用六边形
+    const shape = def.item ? (r) => { ctx.beginPath(); ctx.arc(c, c, r * 0.95, 0, Math.PI * 2); } : hex;
+    shape(58);
     ctx.fillStyle = def.color;
     ctx.fill();
-    hex(52);
+    shape(52);
     const g = ctx.createLinearGradient(0, 0, 0, w);
     g.addColorStop(0, '#2a2f3d');
     g.addColorStop(1, '#10131b');
@@ -672,12 +674,49 @@ export function animateHat(inner, t) {
 }
 
 /** 炸弹：哑光金属球 + 发光能量环 */
-export function buildBomb(skin) {
+/** 腾飞之翼：一对白色发光的翅膀（挂在角色身上，扇动由每帧动画控制） */
+function buildWings(parent) {
+  const g = new THREE.Group();
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0);
+  shape.bezierCurveTo(0.15, 0.25, 0.45, 0.32, 0.55, 0.2);
+  shape.bezierCurveTo(0.45, 0.12, 0.42, 0.04, 0.48, -0.04);
+  shape.bezierCurveTo(0.3, 0.0, 0.15, -0.02, 0, 0);
+  const geo = new THREE.ShapeGeometry(shape);
+  const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#bff7e6', emissiveIntensity: 0.8, side: THREE.DoubleSide, transparent: true, opacity: 0.92 });
+  for (const s of [1, -1]) {
+    const w = new THREE.Mesh(geo, mat);
+    w.scale.set(s * 1.7, 1.7, 1);
+    w.position.set(s * 0.2, 0.45, -0.22);
+    g.add(w);
+  }
+  parent.add(g);
+  return g;
+}
+
+/** 整个角色的透明度（透明人：自己 / 队友看到半透明） */
+function setAlpha(o, a) {
+  if (o.alpha === a) return;
+  o.alpha = a;
+  o.group.traverse((c) => {
+    const m = c.material;
+    if (!m || c.isSprite || c.userData.outline) return;
+    if (m.userData.baseOp === undefined) { m.userData.baseOp = m.opacity; m.userData.baseTr = m.transparent; }
+    m.transparent = a < 1 || m.userData.baseTr;
+    m.opacity = m.userData.baseOp * a;
+    m.needsUpdate = true;
+  });
+}
+
+export function buildBomb(skin, style = '') {
   const g = new THREE.Group();
   const c = (SKINS[skin] || SKINS[0]).color;
+  const fx = BOMB_FX[style];
   const body = new THREE.Mesh(
     new THREE.SphereGeometry(0.3, 32, 24),
-    new THREE.MeshStandardMaterial({ color: 0x1a1d26, roughness: 0.32, metalness: 0.75, emissive: new THREE.Color(0xff2200), emissiveIntensity: 0 }),
+    fx
+      ? new THREE.MeshStandardMaterial({ color: fx.body, roughness: fx.rough, metalness: fx.metal, emissive: new THREE.Color(fx.glow), emissiveIntensity: fx.base })
+      : new THREE.MeshStandardMaterial({ color: 0x1a1d26, roughness: 0.32, metalness: 0.75, emissive: new THREE.Color(0xff2200), emissiveIntensity: 0 }),
   );
   body.position.y = 0.3;
   body.castShadow = true;
@@ -699,8 +738,16 @@ export function buildBomb(skin) {
   const spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
   spark.position.set(0.07, 0.77, 0);
   spark.scale.setScalar(0.3);
+  if (fx) spark.material.color.set(fx.glow);
   g.add(spark);
-  return { group: g, body, spark };
+  if (fx) {
+    // 特效炸弹：身上一圈柔光
+    const aura = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: fx.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.55 }));
+    aura.position.y = 0.3;
+    aura.scale.setScalar(1.1);
+    g.add(aura);
+  }
+  return { group: g, body, spark, baseGlow: fx ? fx.base : 0, style };
 }
 
 export class GameScene {
@@ -752,7 +799,8 @@ export class GameScene {
     this.fallingWalls = new Map();
     this.flashes = [];
 
-    this.composer = new EffectComposer(this.renderer);
+    // 后期处理（泛光）先渲染到离屏缓冲：渲染器自带的 antialias 对它不生效，缓冲本身要开 4× 多重采样
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.5, 0.45, 0.82);
     this.composer.addPass(this.bloom);
@@ -1005,6 +1053,11 @@ export class GameScene {
       m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       board.add(m);
     }
+    this.flameGeo = flameGeo;
+    this.flameMax = N * 5;
+    this.flameSets = { '': { outer: this.flameOuter, inner: this.flameInner, n: 0 } };
+    this.flameCells = new Set();
+    this.fx = [];
     this.flameLight = new THREE.PointLight(th.flameOuter, 0, 8, 1.5);
     this.flameLight.position.y = 1.2;
     board.add(this.flameLight);
@@ -1170,7 +1223,8 @@ export class GameScene {
     if (mine >= me.mb || this.bombBlocked(x, y)) return pos;
     const blk = this.blockStr?.[y * this.W + x];
     if (blk !== '.' && blk !== 'b') return pos;
-    const o = buildBomb(this.info.players.find((p) => p.id === this.myId)?.skin || 0);
+    const meInfo = this.info.players.find((p) => p.id === this.myId);
+    const o = buildBomb(meInfo?.skin || 0, meInfo?.bomb || '');
     o.group.position.set(this.tx(x), 0, this.tz(y));
     this.board.add(o.group);
     this.ghosts.push({ x, y, t: performance.now(), o });
@@ -1330,7 +1384,7 @@ export class GameScene {
     switch (e.k) {
       case 'boom':
         this.shake = Math.min(0.35, this.shake + 0.12 + e.r * 0.01);
-        this.burst(e.x, e.y, 0.4, 16, [th.flameOuter, th.flameInner], 4, 0.12);
+        if (!this.boomFx(e)) this.burst(e.x, e.y, 0.4, 16, [th.flameOuter, th.flameInner], 4, 0.12);
         this.flameFlash = 1;
         break;
       case 'crate':
@@ -1409,6 +1463,119 @@ export class GameScene {
     }
   }
 
+  /** 某种炸弹特效的火焰（InstancedMesh 一对：外焰 + 内焰） */
+  flameSet(style) {
+    if (!BOMB_FX[style]) style = '';
+    let set = this.flameSets[style];
+    if (!set) {
+      const fx = BOMB_FX[style];
+      const outer = new THREE.InstancedMesh(this.flameGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(fx.outer), transparent: true, opacity: 0.92 }), this.flameMax);
+      const inner = new THREE.InstancedMesh(this.flameGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(fx.inner) }), this.flameMax);
+      for (const m of [outer, inner]) {
+        m.count = 0;
+        m.frustumCulled = false;
+        m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        this.board.add(m);
+      }
+      set = this.flameSets[style] = { outer, inner, n: 0 };
+    }
+    return set;
+  }
+
+  /** 柔光精灵 / 平面圆环等一次性特效 */
+  spawnFx(obj, o) {
+    if (this.fx.length > 240) return;
+    obj.renderOrder = 3;
+    this.board.add(obj);
+    this.fx.push({ obj, life: o.life, max: o.life, vx: o.vx || 0, vy: o.vy || 0, vz: o.vz || 0, drag: o.drag || 0, s0: o.s0, s1: o.s1, sy: o.sy, op: o.op ?? 1 });
+  }
+  glowSprite(color, x, y, h) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    sp.position.set(this.tx(x), h, this.tz(y));
+    return sp;
+  }
+  ring(color, x, y) {
+    if (!this.ringGeo) this.ringGeo = new THREE.RingGeometry(0.42, 0.5, 48);
+    const m = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(this.tx(x), 0.06, this.tz(y));
+    return m;
+  }
+  /** 新出现的一格火焰：按特效加一点粒子 */
+  flameCellFx(i, style) {
+    const fx = BOMB_FX[style];
+    if (!fx) return;
+    const x = i % this.W, y = Math.floor(i / this.W);
+    const r = () => Math.random() - 0.5;
+    if (style === 'poison') {
+      // 紫色毒气：缓慢上升、扩散、停留更久
+      for (let k = 0; k < 2; k++) {
+        this.spawnFx(this.glowSprite(fx.parts[k % 3], x + r() * 0.5, y + r() * 0.5, 0.3), { life: 1.6 + Math.random() * 0.8, vx: r() * 0.5, vy: 0.35 + Math.random() * 0.3, vz: r() * 0.5, drag: 1.2, s0: 0.7, s1: 2.1, op: 0.75 });
+      }
+    } else if (style === 'water') {
+      // 水波：每格一圈小涟漪 + 水花
+      this.spawnFx(this.ring(fx.parts[1], x, y), { life: 0.7, s0: 0.5, s1: 1.5, op: 0.8 });
+      this.burst(x, y, 0.3, 3, fx.parts, 2.2, 0.07);
+    } else if (style === 'gold') {
+      // 金光：闪烁的金色光点
+      this.spawnFx(this.glowSprite(fx.parts[0], x + r() * 0.4, y + r() * 0.4, 0.5), { life: 0.6, vy: 1.2, s0: 0.9, s1: 0.2, op: 1 });
+      this.burst(x, y, 0.5, 2, fx.parts, 1.6, 0.06);
+    }
+  }
+  /** 特效炸弹在中心爆开时的大特效 */
+  boomFx(e) {
+    const fx = BOMB_FX[e.st];
+    if (!fx) return false;
+    const { x, y } = e;
+    const r = () => Math.random() - 0.5;
+    if (e.st === 'poison') {
+      for (let k = 0; k < 9; k++) {
+        this.spawnFx(this.glowSprite(fx.parts[k % fx.parts.length], x + r() * 0.6, y + r() * 0.6, 0.35), { life: 2 + Math.random(), vx: r() * 1.4, vy: 0.4 + Math.random() * 0.5, vz: r() * 1.4, drag: 1.1, s0: 0.9, s1: 3.2, op: 0.7 });
+      }
+      this.burst(x, y, 0.4, 10, fx.parts, 3, 0.1);
+    } else if (e.st === 'water') {
+      for (let k = 0; k < 3; k++) {
+        this.spawnFx(this.ring(k ? fx.parts[0] : fx.parts[1], x, y), { life: 0.9 + k * 0.25, s0: 0.4 + k * 0.2, s1: 3.2 + k * 1.2, op: 0.9 - k * 0.2 });
+      }
+      this.burst(x, y, 0.4, 18, fx.parts, 4.5, 0.09);
+    } else if (e.st === 'gold') {
+      // 金色光柱 + 光晕 + 金粉
+      if (!this.pillarGeo) this.pillarGeo = new THREE.CylinderGeometry(0.3, 0.45, 3.2, 24, 1, true);
+      const pillar = new THREE.Mesh(this.pillarGeo, new THREE.MeshBasicMaterial({ color: fx.parts[2], transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      pillar.position.set(this.tx(x), 1.6, this.tz(y));
+      this.spawnFx(pillar, { life: 0.7, s0: 1, s1: 1.8, sy: 1, op: 0.5 });
+      this.spawnFx(this.glowSprite(fx.parts[0], x, y, 0.6), { life: 0.6, s0: 1.5, s1: 4, op: 0.75 });
+      this.spawnFx(this.ring(fx.parts[0], x, y), { life: 0.6, s0: 0.4, s1: 2.6, op: 0.9 });
+      this.burst(x, y, 0.5, 18, fx.parts, 3.5, 0.08);
+    }
+    this.burst(x, y, 0.4, 6, [fx.outer, fx.inner], 4, 0.12);
+    return true;
+  }
+  updateFx(dt) {
+    for (let k = this.fx.length - 1; k >= 0; k--) {
+      const f = this.fx[k];
+      f.life -= dt;
+      if (f.life <= 0) {
+        this.board.remove(f.obj);
+        f.obj.material.dispose();
+        this.fx.splice(k, 1);
+        continue;
+      }
+      const a = 1 - f.life / f.max;
+      if (f.drag) {
+        const d = Math.exp(-f.drag * dt);
+        f.vx *= d; f.vy *= d; f.vz *= d;
+      }
+      f.obj.position.x += f.vx * dt;
+      f.obj.position.y += f.vy * dt;
+      f.obj.position.z += f.vz * dt;
+      const sc = f.s0 + (f.s1 - f.s0) * (1 - (1 - a) * (1 - a));
+      if (f.sy != null) f.obj.scale.set(sc, f.sy, sc);
+      else f.obj.scale.setScalar(sc);
+      f.obj.material.opacity = f.op * Math.min(1, (1 - a) * 1.6);
+    }
+  }
+
   frame() {
     const dt = Math.min(0.05, this.clock.getDelta());
     const t = this.clock.elapsedTime;
@@ -1444,7 +1611,7 @@ export class GameScene {
     const meSnap = this.meSnap;
     const predicting = s && meSnap && meSnap.a && s.ph === 'play' && this.pred?.ready && !this.frozen;
     if (predicting) {
-      this.pred.step(dt, { blocks: this.blockStr || '', bombAt: (x, y) => this.bombBlocked(x, y), realBombAt: (x, y) => this.cur.b.some((b) => Math.round(b[1]) === x && Math.round(b[2]) === y), kick: !!meSnap.k, speedLv: meSnap.s, trapped: meSnap.tr > 0, dir: this.localDir });
+      this.pred.step(dt, { blocks: this.blockStr || '', bombAt: meSnap.wg ? () => false : (x, y) => this.bombBlocked(x, y), realBombAt: (x, y) => this.cur.b.some((b) => Math.round(b[1]) === x && Math.round(b[2]) === y), kick: !!meSnap.k, speedLv: meSnap.s, trapped: meSnap.tr > 0, dir: this.localDir });
       this.reportMove(now);
     }
     const decay = Math.exp(-dt / 0.07);
@@ -1530,14 +1697,47 @@ export class GameScene {
         o.body.visible = !sp.iv || Math.floor(t * 12) % 2 === 0;
         const hitK = Math.max(0, 1 - (t - o.hitT) / 0.4);
         o.bodyMat.emissive.copy(o.baseEmissive).lerp(HIT_RED, hitK);
-        o.shield.visible = !!sp.sh;
-        if (sp.sh) o.shield.scale.setScalar(1 + Math.sin(t * 5) * 0.04);
+        // 护盾（蓝）/ 无敌盾牌（金色光罩，更亮、更大）
+        o.shield.visible = !!sp.sh || !!sp.ish;
+        if (o.shield.visible) {
+          const gold = !!sp.ish;
+          if (o.shield.userData.gold !== gold) {
+            o.shield.userData.gold = gold;
+            o.shield.material.color.set(gold ? '#ffd23f' : '#7fd8ff');
+            o.shield.material.emissive.set(gold ? '#ff9d00' : '#2a8ad8');
+            o.shield.material.opacity = gold ? 0.32 : 0.22;
+          }
+          o.shield.scale.setScalar((gold ? 1.12 : 1) + Math.sin(t * (gold ? 9 : 5)) * 0.04);
+        }
+        // 腾飞之翼：浮起来 + 一对扇动的翅膀
+        if (sp.wg && !o.wings) o.wings = buildWings(o.group);
+        if (o.wings) o.wings.visible = !!sp.wg;
+        o.group.position.y = sp.wg ? 0.22 + Math.sin(t * 6) * 0.04 : 0;
+        if (sp.wg) {
+          const flap = Math.sin(t * 14) * 0.45;
+          o.wings.children[0].rotation.z = 0.35 + flap;
+          o.wings.children[1].rotation.z = -0.35 - flap;
+        }
+        // 超级跑鞋：脚下拖出青色光尘
+        if (sp.bt && moving && Math.random() < dt * 40) this.burst(x, y, 0.08, 1, ['#36d6ff', '#bff4ff'], 0.6, 0.05);
         // 草丛：敌人躲在草丛里看不到（自己所在的草丛会变矮）
         const tile = Math.round(sp.y) * this.W + Math.round(sp.x);
         const inBush = this.blockStr && this.blockStr[tile] === 'b';
         if (inBush && sp.id !== this.myId && tile !== myTile) {
           const sameTeam = this.info.mode === 'team' && me && this.teamOf(sp.id) === this.teamOf(this.myId);
           o.group.visible = sameTeam;
+        }
+        // 透明人：自己和队友看到半透明；敌人只看到地上淡淡的水波纹
+        const ghost = !!sp.gh;
+        const friendly = sp.id === this.myId || (this.info.mode === 'team' && this.teamOf(sp.id) === this.teamOf(this.myId));
+        setAlpha(o, ghost && friendly ? 0.35 : 1);
+        if (ghost && !friendly) {
+          o.group.visible = false;
+          o.rippleT = (o.rippleT ?? 0) - dt;
+          if (o.rippleT <= 0) {
+            o.rippleT = moving ? 0.45 : 0.9;
+            this.spawnFx(this.ring('#d6f0ff', x, y), { life: 0.9, s0: 0.35, s1: 1.1, op: moving ? 0.22 : 0.12 });
+          }
         }
       }
       // 自己所在的草丛变矮变透明
@@ -1569,11 +1769,11 @@ export class GameScene {
       const bB = new Map(B.b.map((b) => [b[0], b]));
       const seen = new Set();
       for (const b of s.b) {
-        const [id, bx, by, fuse, skin] = b;
+        const [id, bx, by, fuse, skin, , style] = b;
         seen.add(id);
         let o = this.bombs.get(id);
         if (!o) {
-          o = buildBomb(skin);
+          o = buildBomb(skin, style || '');
           o.born = t;
           this.board.add(o.group);
           this.bombs.set(id, o);
@@ -1589,7 +1789,7 @@ export class GameScene {
         const pulse = 1 + Math.sin(t * (6 + urgency * 26)) * (0.05 + urgency * 0.07);
         const appear = Math.min(1, (t - o.born) / 0.15);
         o.group.scale.set(pulse * appear, (2 - pulse) * appear, pulse * appear);
-        o.body.material.emissiveIntensity = urgency > 0.6 ? (Math.sin(t * 30) * 0.5 + 0.5) * (urgency - 0.6) * 2 : 0;
+        o.body.material.emissiveIntensity = o.baseGlow * (0.8 + Math.sin(t * 5) * 0.2) + (urgency > 0.6 ? (Math.sin(t * 30) * 0.5 + 0.5) * (urgency - 0.6) * 2 : 0);
         o.spark.scale.setScalar(0.22 + Math.random() * 0.15);
       }
       for (const [id, o] of this.bombs) {
@@ -1608,9 +1808,16 @@ export class GameScene {
     // 火焰
     if (s) {
       const dummy = new THREE.Object3D();
-      let no = 0, ni = 0;
       const wob = 1 + Math.sin(t * 40) * 0.06;
-      for (const [i, mask] of s.f) {
+      const sets = this.flameSets;
+      for (const k in sets) sets[k].n = 0;
+      const nowCells = new Set();
+      let lightStyle = '';
+      for (const [i, mask, style = ''] of s.f) {
+        const set = this.flameSet(style);
+        nowCells.add(i);
+        if (!this.flameCells.has(i)) this.flameCellFx(i, style); // 新出现的火焰格：特效粒子
+        if (style) lightStyle = style;
         const cx = this.tx(i % this.W), cz = this.tz(Math.floor(i / this.W));
         const put = (mesh, idx, x, z, sx, sy, sz, y) => {
           dummy.position.set(x, y, z);
@@ -1622,20 +1829,23 @@ export class GameScene {
         const w2 = 1 + Math.sin(t * 30 + i * 1.7) * 0.08;
         const thick = 0.7 * w2, inner = 0.36 * w2;
         const center = mask & 16;
-        put(this.flameOuter, no++, cx, cz, thick + (center ? 0.2 : 0), (center ? 0.8 : 0.6) * w2, thick + (center ? 0.2 : 0), 0.32);
-        put(this.flameInner, ni++, cx, cz, inner + (center ? 0.12 : 0), (center ? 0.95 : 0.72) * w2, inner + (center ? 0.12 : 0), 0.34);
+        put(set.outer, set.n, cx, cz, thick + (center ? 0.2 : 0), (center ? 0.8 : 0.6) * w2, thick + (center ? 0.2 : 0), 0.32);
+        put(set.inner, set.n++, cx, cz, inner + (center ? 0.12 : 0), (center ? 0.95 : 0.72) * w2, inner + (center ? 0.12 : 0), 0.34);
         const arms = [[1, 0, -1], [2, 1, 0], [4, 0, 1], [8, -1, 0]];
         for (const [bit, dx, dz] of arms) {
           if (!(mask & bit)) continue;
           const ox = cx + dx * 0.3, oz = cz + dz * 0.3;
-          put(this.flameOuter, no++, ox, oz, dx ? 0.78 : thick * 0.92, 0.55 * w2, dz ? 0.78 : thick * 0.92, 0.3);
-          put(this.flameInner, ni++, ox, oz, dx ? 0.7 : inner, 0.66 * w2, dz ? 0.7 : inner, 0.32);
+          put(set.outer, set.n, ox, oz, dx ? 0.78 : thick * 0.92, 0.55 * w2, dz ? 0.78 : thick * 0.92, 0.3);
+          put(set.inner, set.n++, ox, oz, dx ? 0.7 : inner, 0.66 * w2, dz ? 0.7 : inner, 0.32);
         }
       }
-      this.flameOuter.count = no;
-      this.flameInner.count = ni;
-      this.flameOuter.instanceMatrix.needsUpdate = true;
-      this.flameInner.instanceMatrix.needsUpdate = true;
+      for (const k in sets) {
+        const st = sets[k];
+        st.outer.count = st.inner.count = st.n;
+        st.outer.instanceMatrix.needsUpdate = st.inner.instanceMatrix.needsUpdate = true;
+      }
+      this.flameCells = nowCells;
+      this.flameLight.color.set(BOMB_FX[lightStyle]?.light || this.th.flameOuter);
       this.flameLight.intensity = s.f.length ? 6 : Math.max(0, this.flameLight.intensity - dt * 30);
       if (s.f.length) {
         const [i] = s.f[Math.floor(s.f.length / 2)];
@@ -1715,6 +1925,7 @@ export class GameScene {
     this.pMesh.instanceMatrix.needsUpdate = true;
     if (this.pMesh.instanceColor) this.pMesh.instanceColor.needsUpdate = true;
 
+    if (this.fx) this.updateFx(dt);
     this.animateEnvironment(dt, t);
 
     // 开场镜头：从高空旋转俯冲到战场

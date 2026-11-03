@@ -112,7 +112,7 @@ docker run -d --name bombblob --network bombblob --restart unless-stopped \
 | `LOGIN_GUEST` | | `false` | `true` 允许游客登录与 8 位 ID 登录；不开时只能 GitHub 登录 |
 | `PORT` / `HOST` | | `8000` / `0.0.0.0` | 监听端口 / 地址 |
 
-> 若 `LOGIN_GUEST` 与 `LOGIN_GITHUB` 都没开，服务器会临时开启游客登录并打印警告，避免没人能登录。
+> 若 `LOGIN_GUEST` 与 `LOGIN_GITHUB` 都没开，**服务器拒绝启动**。某一种关闭时，它对应的接口直接返回 404：游客关闭时是 `/api/guest` 和 `/api/login`；GitHub 关闭时是 `/auth/github`、`/oauth/callback` 和 `/api/oauth/exchange`。登录页进入时请求 `/login-info`（只返回 `{guest, github}`），据此只显示开启的登录方式。
 
 ---
 
@@ -206,6 +206,8 @@ docker exec -i bombblob-db psql -U bombblob bombblob < db/init.sql
 
 调整数值（等级曲线、装饰价格 / 解锁等级）直接改 `levels` / `cosmetics` 表后重启即可。
 
+**所有字段都是 NOT NULL，数据库里不存 NULL**：没有值时文本存 `''`，数字存 `0`，时间存 `'epoch'`（1970-01-01，表示「尚未发生」，例如 token 未使用）。唯一例外是 `matches.winner_team`：没有获胜队伍时存 `-1`，因为 `0` 是红队。对局结果 JSON（`matches.result`）写入前也会把 null 换掉。旧库里可为空的列，启动时会自动迁移（一次性）。
+
 ### 备份与恢复
 
 ```bash
@@ -229,7 +231,7 @@ docker run -d --name bombblob ...（与第 5 节相同的参数）
 ```
 
 - 数据库迁移在启动时自动完成；
-- 会话保存在内存里，重启后玩家的连接会断开，浏览器会用本地的一次性 token **自动重新登录**；进行中的对局会丢失；
+- 会话保存在内存里，重启后玩家的连接会断开，玩家需要重新点登录（不做自动登录）；进行中的对局会丢失；
 - 部分迁移**不可逆**（例如旧版「金币」按 5:1 并入点数后删除金币列），升级前务必备份；
 - 如果更换了 RSA 密钥：新镜像 + 新 `RSA_PRIVATE_KEY` 必须一起上线，旧页面需要刷新。
 

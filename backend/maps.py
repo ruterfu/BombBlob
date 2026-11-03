@@ -293,6 +293,14 @@ def build_map(map_id: str, rng: random.Random | None = None) -> BuiltMap:
                 x, y = sx + dx, sy + dy
                 if 0 <= x < W and 0 <= y < H and blocks[y * W + x] in DESTRUCTIBLE:
                     blocks[y * W + x] = "."
+    # 传送门四周不放木箱：传送过去后一定能走开（否则落在被木箱围住的格子里，传送锁解不开就永远出不来）
+    for cells in tele_pos.values():
+        for i in cells:
+            x, y = i % W, i // W
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < W and 0 <= ny < H and blocks[ny * W + nx] in DESTRUCTIBLE:
+                    blocks[ny * W + nx] = "."
     tele: dict[int, int] = {}
     for a, b in tele_pos.values():
         tele[a] = b
