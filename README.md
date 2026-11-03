@@ -9,6 +9,16 @@
 
 📦 **部署到服务器请看 [DEPLOY.md](DEPLOY.md)**（Docker、环境变量、密钥、GitHub OAuth、HTTPS 反向代理、备份与升级、排障）。
 
+## 游戏截图
+
+![对局：遗迹广场 · 个人混战（6 人）](demoImage/battle.jpg)
+
+| 登录 | 大厅 |
+| --- | --- |
+| ![登录页：GitHub 登录与语言切换](demoImage/login.jpg) | ![大厅：角色展示台、快速匹配 / 创建房间](demoImage/lobby.jpg) |
+| **房间** | **商店** |
+| ![房间：选择地图与玩法（团队模式 / 道具 / 缩圈 / 时间限制）](demoImage/room.jpg) | ![商店：炸弹特效（毒弹 / 水弹 / 金弹）](demoImage/shop.jpg) |
+
 ## 快速开始（本地开发）
 
 ```bash
@@ -279,5 +289,6 @@ scripts/
   gen_rsa.py     生成 RSA 密钥对
   loadtest.py    压力测试
 DEPLOY.md        部署手册
+demoImage/       README 里的游戏截图（1920 宽）
 tests/           规则单元测试 + 端到端服务器测试（124 个）
 ```
