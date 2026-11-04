@@ -343,11 +343,11 @@ function renderBoostPill() {
     if (!b || b.until <= now) continue;
     const name = t(kind === 'exp' ? 'boost.exp' : 'boost.points', { x: b.pct / 100 });
     parts.push(`<span class="bk ${kind}">${icon(kind === 'exp' ? 'star' : 'gem')}<b>×${b.pct / 100}</b></span>`);
-    tips.push(t('boost.active', { name, t: timeLeft(b.until) }));
+    tips.push(`<div class="${kind}">${icon(kind === 'exp' ? 'star' : 'gem')}<span>${esc(name)}</span><b>${esc(t('boost.left', { t: timeLeft(b.until) }))}</b></div>`);
   }
   el.classList.toggle('hidden', !parts.length);
-  el.innerHTML = parts.join('');
-  el.title = tips.join('\n');
+  // 悬停浮层：立即显示每张卡的剩余时间（不用浏览器自带的 title，那个要等一秒多才出现）
+  el.innerHTML = parts.join('') + (tips.length ? `<div class="boost-tip">${tips.join('')}</div>` : '');
 }
 
 /** 购买成功提示里的商品名：加成卡 / 炸弹特效 / 头饰 */
@@ -469,6 +469,7 @@ function openShop() {
 }
 $('#points-pill').onclick = openShop;
 $('#boost-pill').onclick = openShop;
+$('#boost-pill').addEventListener('mouseenter', renderBoostPill); // 悬停时刷新一次剩余时间
 setInterval(renderBoostPill, 30000); // 到期后自动消失、剩余时间随之更新
 $('#btn-profile-shop').onclick = () => { $('#profile-modal').classList.add('hidden'); openShop(); };
 
