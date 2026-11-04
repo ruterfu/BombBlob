@@ -1,0 +1,15 @@
+{
+  "_说明": "商店功能性道具，按商品 ID 配置（价格单位：点数 / 钻石）。头饰装饰在数据库 cosmetics 表里，不在这里。修改后重启服务器生效。price 为 -1 表示该物品不可用；缺少某个商品、或内容与 ID 对不上（例如 exp150 的 pct 不是 150），该物品也会显示为不可用。",
+  "rename": { "_说明": "更名卡：可叠加，每次改名消耗 1 张", "price": 100 },
+
+  "poison": { "_说明": "毒弹（纯画面）：同一时间只有一种炸弹特效生效，再次购买会覆盖，有效期从购买时重新计算", "type": "bomb", "price": 200, "days": 7 },
+  "water":  { "_说明": "水弹（纯画面）", "type": "bomb", "price": 200, "days": 7 },
+  "gold":   { "_说明": "金弹（纯画面）", "type": "bomb", "price": 200, "days": 7 },
+
+  "exp150": { "_说明": "1.5 倍经验卡：经验 / 点数各占一个位置；同倍率再买顺延 hours 小时，不同倍率立即替换", "type": "boost", "kind": "exp", "pct": 150, "price": 160, "hours": 24 },
+  "exp200": { "_说明": "2 倍经验卡", "type": "boost", "kind": "exp", "pct": 200, "price": 220, "hours": 24 },
+  "exp300": { "_说明": "3 倍经验卡", "type": "boost", "kind": "exp", "pct": 300, "price": 300, "hours": 24 },
+  "pts150": { "_说明": "1.5 倍点数（钻石）卡", "type": "boost", "kind": "points", "pct": 150, "price": 200, "hours": 24 },
+  "pts200": { "_说明": "2 倍点数（钻石）卡", "type": "boost", "kind": "points", "pct": 200, "price": 280, "hours": 24 },
+  "pts300": { "_说明": "3 倍点数（钻石）卡", "type": "boost", "kind": "points", "pct": 300, "price": 360, "hours": 24 }
+}

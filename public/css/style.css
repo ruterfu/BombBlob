@@ -292,15 +292,15 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 .bot-levels button small { color: var(--muted); font-size: 12px; }
 .bot-levels button:hover, .bot-levels button.on { background: color-mix(in srgb, var(--c) 14%, rgba(6,8,12,.5)); border-color: var(--c); }
 .bot-levels button.easy { --c: #4cc38a; } .bot-levels button.normal { --c: #ffb547; } .bot-levels button.hard { --c: #ff5d5d; }
-.room-settings { right: 20px; top: 96px; width: min(380px, 32vw); padding: 14px; }
-.map-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.map-card { background: rgba(255,255,255,.025); border: 1px solid var(--line); padding: 4px 4px 6px; text-align: center; font-size: 12px; color: var(--muted); transition: border-color .15s, color .15s, transform .15s; cursor: pointer; position: relative; }
+.room-settings { right: 20px; top: 96px; width: min(560px, 44vw); padding: 12px; }
+.map-picker { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.map-card { background: rgba(255,255,255,.025); border: 1px solid var(--line); padding: 3px 3px 4px; text-align: center; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); transition: border-color .15s, color .15s, transform .15s; cursor: pointer; position: relative; }
 .map-card:hover:not(.locked) { border-color: rgba(255,255,255,.3); color: var(--text); transform: translateY(-2px); }
 .map-card canvas { width: 100%; aspect-ratio: 15 / 13; margin-bottom: 4px; }
 .map-card.on { border-color: var(--amber); color: var(--amber); box-shadow: 0 0 18px rgba(255,181,71,.25), inset 0 0 0 1px var(--amber); }
 .map-card.locked { cursor: default; }
 .map-card .rand { aspect-ratio: 15 / 13; display: flex; align-items: center; justify-content: center; background: repeating-linear-gradient(45deg, #151a26 0 8px, #11151f 8px 16px); margin-bottom: 4px; color: var(--muted); }
-.map-card .rand .ic { width: 34px; height: 34px; stroke-width: 1.5; }
+.map-card .rand .ic { width: 26px; height: 26px; stroke-width: 1.5; }
 .map-desc { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 18px; text-align: center; line-height: 1.5; }
 .room-bottom { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .room-buttons { display: flex; gap: 12px; align-items: center; }
@@ -448,7 +448,9 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
   .btn-mega { min-width: 0; flex: 1; padding: 12px 14px; }
   .btn-mega .big { font-size: 18px; }
   .room-members { width: 190px; }
-  .room-settings { width: 230px; }
+  .room-settings { width: 260px; max-height: calc(100vh - 220px); overflow-y: auto; }
+  .room-settings .map-picker { grid-template-columns: repeat(3, 1fr); }
+  .room-settings .opt-rows { grid-template-columns: 1fr; }
   .chat-float { display: none; }
   .hud-players { width: 150px; }
   .hp .pw { display: none; }
@@ -490,6 +492,17 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 @media (max-width: 900px) { .hud-left { width: 170px; } .item-tip p { font-size: 11px; } }
 
 /* ===== 点数 / 商店 ===== */
+/* 版本号：登录页与大厅的左下角 */
+.ver-tag { position: absolute; left: 6vw; bottom: 8px; font-family: var(--display); font-size: 12px; letter-spacing: .1em; color: var(--dim); white-space: nowrap; pointer-events: none; }
+.ver-tag:empty { display: none; }
+/* 生效中的加成卡（商店按钮左边） */
+.boost-pill { cursor: pointer; gap: 10px; padding: 8px 12px; border-color: rgba(62,224,143,.4); transition: transform .15s, border-color .15s; }
+.boost-pill:hover { transform: translateY(-1px); border-color: #3ee08f; }
+.boost-pill .bk { display: inline-flex; align-items: center; gap: 3px; font-size: 16px; }
+.boost-pill .bk .ic { width: 18px; height: 18px; animation: boostGlow 2.4s ease-in-out infinite; }
+.boost-pill .bk.exp { color: #3ee08f; } .boost-pill .bk.exp .ic { filter: drop-shadow(0 0 6px #3ee08f); }
+.boost-pill .bk.points { color: #ffb547; } .boost-pill .bk.points .ic { filter: drop-shadow(0 0 6px #ffb547); }
+@keyframes boostGlow { 50% { opacity: .6; } }
 .points-pill { cursor: pointer; color: #e9ddff; border-color: rgba(176,124,255,.45); transition: transform .15s, border-color .15s; }
 .points-pill .ic { color: #b07cff; filter: drop-shadow(0 0 6px #b07cff); }
 .points-pill small { font-family: var(--font); font-size: 12px; letter-spacing: .15em; color: var(--muted); margin-left: 2px; }
@@ -565,6 +578,16 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 .reconnect .box { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 22px 34px; background: var(--panel); border: 1px solid var(--line); clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%); }
 .reconnect b { font-size: 18px; letter-spacing: .1em; color: var(--amber); }
 .reconnect small { color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+/* 开局等待玩家连接 */
+.wait-start { z-index: 85; }
+.wait-list { display: grid; gap: 6px; min-width: 240px; margin: 4px 0; }
+.wait-list .row { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); }
+.wait-list .row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wait-list .row .st { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.wait-list .row.ok .st { color: #4cc38a; }
+.wait-list .row .st svg { width: 14px; height: 14px; }
+.btn.busy { pointer-events: none; opacity: .85; }
+.btn .spinner.inline { width: 16px; height: 16px; border-width: 2px; display: inline-block; vertical-align: -3px; margin-right: 8px; }
 
 /* ===== 房间密码 ===== */
 .create-row { display: flex; gap: 10px; }
@@ -617,13 +640,27 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 .hp.offline .n::after { content: ' ⚡'; color: #ff4d5e; }
 /* 商店：炸弹特效 */
 .shop-note { color: var(--muted); font-size: 12px; margin: 2px 0 10px; }
+.boost-card .tool-ic { position: relative; }
+.shop-card.unavailable { opacity: .55; filter: grayscale(.7); }
+.shop-card .pr .na { color: var(--dim); }
+.boost-card.exp .tool-ic { color: #3ee08f; background: radial-gradient(circle at 50% 45%, #1f4a36, #141924 70%); }
+.boost-card.exp .tool-ic .ic { filter: drop-shadow(0 0 10px #3ee08f); }
+.boost-card.points .tool-ic { color: #ffb547; background: radial-gradient(circle at 50% 45%, #4a3a1f, #141924 70%); }
+.boost-card.points .tool-ic .ic { filter: drop-shadow(0 0 10px #ffb547); }
+.boost-card .tool-ic b { position: absolute; right: 8px; bottom: 6px; font-family: var(--display); font-size: 20px; color: #fff; text-shadow: 0 0 8px currentColor; }
+.rw-bonus { font-size: 12px; color: var(--muted); margin: -2px 0 8px; text-align: center; }
+.rw-bonus b { color: #3ee08f; }
+.boost-tag { margin-left: 4px; padding: 0 4px; font-size: 11px; color: #0d1018; background: #3ee08f; border-radius: 2px; vertical-align: middle; }
 .bomb-card canvas { width: 110px; height: 110px; }
 /* 房间玩法设置：标题 + 选项 */
-.opt-rows { display: grid; gap: 8px; margin-top: 14px; }
-.opt-row { display: grid; grid-template-columns: 5.5em 1fr; align-items: center; gap: 10px; }
-.opt-row > span { color: var(--muted); font-size: 13px; letter-spacing: .06em; text-align: right; }
-.opt-row .seg { justify-self: start; }
-.opt-row .seg button { padding: 7px 14px; }
+/* 玩法选项：两列卡片，按钮组铺满整张卡片；最后一项（时间限制）横跨两列 */
+.opt-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.opt-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; background: rgba(255,255,255,.025); border: 1px solid var(--line); }
+.opt-row:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.opt-row > span { color: var(--muted); font-size: 11px; letter-spacing: .14em; text-align: left; }
+.opt-row .seg { display: flex; width: 100%; }
+.opt-row .seg button { flex: 1; padding: 7px 6px; font-size: 13px; white-space: nowrap; }
+.opt-row .seg.locked { opacity: .6; }
 /* 道具栏（左下角 6 格） */
 .item-dock { position: absolute; left: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
 .item-bar { display: flex; gap: 6px; }

@@ -347,3 +347,29 @@ CREATE TABLE IF NOT EXISTS bomb_purchases (
     expires_at  TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bomb_purchases_user ON bomb_purchases (user_id, id DESC);
+
+-- ========== 加成卡（商店） ==========
+-- 经验卡 / 点数卡：×1.5 / ×2 / ×3，有效 24 小时，期间对局获得的经验 / 点数按倍率加成。
+-- 经验和点数各占一个位置：再买同一倍率 → 在当前到期时间上再加 24 小时；买不同倍率 → 立即替换，从现在起 24 小时。
+-- 倍率按百分比存（100 = 没有加成）。
+ALTER TABLE users ADD COLUMN IF NOT EXISTS exp_boost INTEGER NOT NULL DEFAULT 100;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS exp_boost_until TIMESTAMPTZ NOT NULL DEFAULT 'epoch';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS points_boost INTEGER NOT NULL DEFAULT 100;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS points_boost_until TIMESTAMPTZ NOT NULL DEFAULT 'epoch';
+DO $$ BEGIN
+    ALTER TABLE users ADD CONSTRAINT users_exp_boost_chk CHECK (exp_boost = ANY (ARRAY[100, 150, 200, 300]));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+    ALTER TABLE users ADD CONSTRAINT users_points_boost_chk CHECK (points_boost = ANY (ARRAY[100, 150, 200, 300]));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- 购买记录（审计 / 客服查询）
+CREATE TABLE IF NOT EXISTS boost_purchases (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL CHECK (kind IN ('exp', 'points')),
+    pct         INTEGER NOT NULL CHECK (pct IN (150, 200, 300)),
+    price_paid  INTEGER NOT NULL CHECK (price_paid >= 0),
+    bought_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS boost_purchases_user ON boost_purchases (user_id, id DESC);

@@ -102,7 +102,7 @@ class Room:
         self.members: list[dict] = []  # {id,name,skin,hat,isBot,ready,team,connected}
         # items：是否掉落道具（针 / 无敌盾牌 / 超级跑鞋 / 透明人 / 腾飞之翼）；time：时间限制（分钟）
         self.settings = {"mapId": "meadow", "mode": "ffa", "lives": 2, "maxPlayers": MAX_PLAYERS, "shrink": True,
-                         "items": True, "time": 10}
+                         "items": True, "time": 10, "revive": False}
         self.apply_settings(settings)
         self.state = "waiting"
         self.password: str | None = None  # 房间密码（6 位数字 / 英文），只保存在内存
@@ -119,6 +119,8 @@ class Room:
             self.settings["shrink"] = s["shrink"]
         if isinstance(s.get("items"), bool):
             self.settings["items"] = s["items"]
+        if isinstance(s.get("revive"), bool):
+            self.settings["revive"] = s["revive"]
         if s.get("time") in ROUND_MINUTES:
             self.settings["time"] = s["time"]
         if s.get("lives") is not None:
@@ -258,10 +260,14 @@ class Room:
             on_anomaly=self.lobby.anomaly,
             shrink=self.settings["shrink"],
             items=self.settings.get("items", True),
+            revive=self.settings.get("revive", False),
             net_rate=self.lobby.net_rate,
             round_time=60.0 * self.settings.get("time", 10),
         )
         self.broadcast_info()
+        for m in self.members:
+            if not m["isBot"] and not m.get("connected", True):
+                self.game.player_loaded(m["id"])  # 开局时已经离线：不等他
         self.broadcast(self.game.start_info())
         self.game.start()
         self.lobby.broadcast_lobby()
@@ -354,7 +360,7 @@ class Lobby:
 
         room = self.room_of(user["id"])
         client.send({"t": "welcome", "user": store.public_user(user), "maps": map_summaries(), "levels": store.level_table(),
-                     "shop": store.shop_catalog(), "renameCardPrice": store.RENAME_CARD_PRICE, "bombShop": store.bomb_shop(),
+                     "shop": store.shop_catalog(), "renameCardPrice": store.RENAME_CARD_PRICE, "bombShop": store.bomb_shop(), "boostShop": store.boost_shop(),
                      "roomId": room.id if room else None, "inGame": bool(room and room.game)})
         if room:
             m = room.member(user["id"])
@@ -414,6 +420,7 @@ class Lobby:
                     m["connected"] = False
                 if room.game:
                     room.game.set_input(uid, direction=None)
+                    room.game.player_loaded(uid)  # 开局等待中断线：不再等他
                     # 对局中断线：全场广播
                     room.broadcast({"t": "presence", "id": uid, "name": client.user["name"], "on": False})
                 room.broadcast_info()
@@ -599,6 +606,9 @@ class Lobby:
             if room and room.game:
                 room.game.client_move(uid, msg.get("x"), msg.get("y"), facing=msg.get("f"), moving=msg.get("m"),
                                       kick=msg.get("k"), seq=msg.get("q"), epoch=msg.get("e"), ping=msg.get("p"))
+        elif t == "loaded":
+            if room and room.game:
+                room.game.player_loaded(uid)  # 场景加载完成：可以开始倒计时了
         elif t == "use":
             if room and room.game:
                 room.game.use_item(uid, msg.get("s"))  # 使用道具栏第 s 格（0–5）
@@ -638,7 +648,7 @@ class Lobby:
         except store.ShopError as e:
             client.send({"t": "error", "code": e.code})
             return
-        client.send({"t": "bought", "item": item if item == "rename" or item in store.BOMB_STYLES else client.user["hat"]})
+        client.send({"t": "bought", "item": item if item == "rename" or item in store.BOMB_STYLES or item in store.BOOST_IDS else client.user["hat"]})
         client.send({"t": "me", "user": store.public_user(client.user)})
         room = self.room_of(client.id)
         if room and room.state == "waiting":

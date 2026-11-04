@@ -63,21 +63,94 @@ class ProviderDisabled(Exception):
 
 
 # ---------- 等级与奖励 ----------
-# 获胜：100 + 每次击倒 10 + 每次救援 10；失败（含平局）：同一算式的 15%（不到胜利的 20%）；点数仅获胜
+# 经验 —— 获胜：100 + 每次击倒 10 + 每次救援 10；失败（含平局）：同一算式的 15%
 WIN_BASE_EXP = 100
 KILL_EXP = 10
 RESCUE_EXP = 10
 LOSS_RATE = 0.15
 MIN_LOSS_EXP = 5
-# 点数（买装饰）：只有获胜才有
-WIN_POINTS, KILL_POINTS, RESCUE_POINTS = 10, 2, 2
-# 更名卡：100 点（约 7 场胜利），可叠加，每次改名消耗 1 张
-RENAME_CARD_PRICE = 100
-# 炸弹特效（纯画面，范围 / 威力 / 爆炸时间与普通炸弹完全一样）：每次 200 点，有效 7 天。
-# 同一时间只有一种生效：再次购买（同一种或另一种）会覆盖之前的，有效期从购买时重新算 7 天。
-BOMB_STYLES = ("poison", "water", "gold")  # 毒弹 / 水弹 / 金弹
-BOMB_PRICE = 200
-BOMB_DAYS = 7
+# 点数（钻石）—— 获胜：10 + 每次击倒 4 + 每次救援 2；失败：同一算式的 15%–35%（随机浮动）
+WIN_POINTS, KILL_POINTS, RESCUE_POINTS = 10, 4, 2
+LOSS_POINTS_PCT = (15, 35)
+# 点数加成（百分比直接相加，不相乘）：
+#   连杀：获胜时，结束时的连杀数 × 5%（被泡泡包住清零），最多 +30%
+#   复活赛排名：前三名 +25% / +15% / +5%
+#   点数卡：×1.5 / ×2 / ×3 即 +50% / +100% / +200%
+#   例：连杀 +30% 且有双倍点数卡 → 100% + 30% + 100% = 230%
+STREAK_PCT, STREAK_MAX = 5, 30
+# 商店功能性道具（更名卡 / 炸弹特效 / 加成卡）：db/store_item.json，按商品 ID 配置价格与时长，启动时读取。
+#   更名卡：可叠加，每次改名消耗 1 张。
+#   炸弹特效（纯画面）：同一时间只有一种生效，再次购买会覆盖之前的，有效期从购买时重新计算。
+#   加成卡：对局获得的经验 / 点数 ×1.5 / ×2 / ×3。经验与点数各占一个位置：
+#     再买同一倍率 → 在当前到期时间上顺延；买不同倍率 → 立即替换，从现在起重新计算。
+# 物品不可用（显示「物品不可用」、不能购买）：price 为 -1、JSON 里缺少该 ID、格式不对，
+# 或内容与 ID 对不上（例如 exp150 的 kind / pct 不是 exp / 150）。
+STORE_ITEMS_FILE = Path(__file__).resolve().parent.parent / "db" / "store_item.json"
+BOMB_STYLES = ("poison", "water", "gold")  # 毒弹 / 水弹 / 金弹（与 users_bomb_style_chk 一致）
+# 加成卡 ID → (种类, 倍率百分比)；倍率与 users_*_boost_chk 一致
+BOOST_IDS = {"exp150": ("exp", 150), "exp200": ("exp", 200), "exp300": ("exp", 300),
+             "pts150": ("points", 150), "pts200": ("points", 200), "pts300": ("points", 300)}
+UNAVAILABLE = -1
+
+
+def load_store_items(path: Path = STORE_ITEMS_FILE) -> dict[str, dict]:
+    """读取 store_item.json → {商品 ID: {"price": 价格或 None（不可用）, "days" / "hours": …}}。
+    单个物品配置有问题只会让它不可用（并打印原因），不影响其他物品和服务器启动。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("顶层必须是对象")
+    except (OSError, ValueError) as e:
+        print(f"[store] 读取 {path.name} 失败（{e}），所有商店道具不可用")
+        data = {}
+
+    def pos_int(v: object, lo: int) -> int | None:
+        return v if isinstance(v, int) and not isinstance(v, bool) and v >= lo else None
+
+    def parse(iid: str, want: dict) -> dict:
+        e = data.get(iid)
+        if not isinstance(e, dict):
+            print(f"[store] {path.name} 缺少 {iid}，该物品不可用")
+            return {"price": None}
+        price = e.get("price")
+        if price == UNAVAILABLE:
+            return {"price": None}
+        price = pos_int(price, 0)
+        bad = price is None
+        for k, v in want.items():  # 内容必须与 ID 对上
+            if e.get(k) != v:
+                bad = True
+        out: dict = {"price": price}
+        dur = {"bomb": "days", "boost": "hours"}.get(want.get("type", ""))  # 炸弹特效按天、加成卡按小时
+        if dur:
+            out[dur] = pos_int(e.get(dur), 1)
+            bad = bad or out[dur] is None
+        if bad:
+            print(f"[store] {path.name} 中 {iid} 的配置与 ID 不符或格式不对，该物品不可用")
+            out["price"] = None
+        return out
+
+    items = {"rename": parse("rename", {})}
+    for st in BOMB_STYLES:
+        items[st] = parse(st, {"type": "bomb"})
+    for cid, (kind, pct) in BOOST_IDS.items():
+        items[cid] = {**parse(cid, {"type": "boost", "kind": kind, "pct": pct}), "kind": kind, "pct": pct}
+    for k in data:
+        if not k.startswith("_") and k not in items:
+            print(f"[store] {path.name} 中的 {k} 不是已知商品，已忽略")
+    return items
+
+
+STORE_ITEMS = load_store_items()
+
+
+def item_price(iid: str) -> int | None:
+    """商品价格；None 表示物品不可用。"""
+    e = STORE_ITEMS.get(iid)
+    return e["price"] if e else None
+
+
+RENAME_CARD_PRICE = item_price("rename")  # None = 不可用
 
 # 等级曲线：第 n 级升到 n+1 级需要 100 + 50*(n-1) 经验；levels 表存 1–50 级，之后按同一曲线无限延伸
 MAX_LEVEL = 50  # levels 表的行数（不是上限）
@@ -145,17 +218,27 @@ def level_exp(lv: int) -> int:
     return LEVEL_EXP[-1] + 25 * m * m + (d - 25) * m
 
 
-def points_for(win: bool, kills: int, rescues: int = 0) -> int:
-    """点数：只有获胜才获得。"""
-    return WIN_POINTS + KILL_POINTS * kills + RESCUE_POINTS * rescues if win else 0
+def points_for(win: bool, kills: int, rescues: int = 0, loss_pct: int | None = None) -> int:
+    """基础点数（不含加成）。失败时按 loss_pct%（默认在 15%–35% 之间随机）。"""
+    full = WIN_POINTS + KILL_POINTS * kills + RESCUE_POINTS * rescues
+    if win:
+        return full
+    if loss_pct is None:
+        loss_pct = random.randint(*LOSS_POINTS_PCT)
+    return round(full * loss_pct / 100)
 
 
-def reward_for(win: bool, kills: int, rescues: int = 0, place: int = 99) -> tuple[int, int]:
-    """返回 (经验, 点数)。点数只有获胜才有。"""
+def reward_for(win: bool, kills: int, rescues: int = 0, place: int = 99, loss_pct: int | None = None) -> tuple[int, int]:
+    """返回基础 (经验, 点数)，不含连杀 / 排名 / 加成卡。"""
     full = WIN_BASE_EXP + KILL_EXP * kills + RESCUE_EXP * rescues
     if win:
         return full, points_for(True, kills, rescues)
-    return max(MIN_LOSS_EXP, round(full * LOSS_RATE)), 0
+    return max(MIN_LOSS_EXP, round(full * LOSS_RATE)), points_for(False, kills, rescues, loss_pct)
+
+
+def streak_bonus(win: bool, streak: int) -> int:
+    """连杀加成（%）：只有获胜才有，每连杀 1 人 +5%，最多 +30%。"""
+    return min(STREAK_MAX, STREAK_PCT * max(0, int(streak))) if win else 0
 
 
 # 商店装饰目录（启动时从 cosmetics 表加载）：id -> {"code", "level", "price"}
@@ -329,6 +412,8 @@ def _row_to_user(row: asyncpg.Record) -> dict:
         "lang": row["lang"] or None,
         "bombStyle": row["bomb_style"],
         "bombUntil": _ms(row["bomb_until"]),
+        "expBoost": row["exp_boost"], "expBoostUntil": _ms(row["exp_boost_until"]),
+        "pointsBoost": row["points_boost"], "pointsBoostUntil": _ms(row["points_boost_until"]),
         "stats": {"games": row["games"], "wins": row["wins"], "kills": row["kills"]},
     }
     if u is None:
@@ -347,6 +432,8 @@ def public_user(u: dict) -> dict:
         "lang": u.get("lang"),
         # 炸弹特效：只在有效期内返回（过期后自动恢复普通火焰）
         "bomb": {"style": active_bomb(u), "until": u.get("bombUntil", 0) if active_bomb(u) else 0},
+        # 加成卡：只返回生效中的 {"pct": 150, "until": 毫秒}
+        "boosts": {k: {"pct": active_boost(u, k), "until": u.get(k + "BoostUntil", 0)} for k in ("exp", "points") if active_boost(u, k) > 100},
     }
 
 
@@ -513,21 +600,25 @@ class ShopError(Exception):
 
 
 async def _buy_bomb(u: dict, style: str) -> dict:
-    """购买炸弹特效：扣点数并覆盖当前特效，有效期 = 现在 + 7 天（并发安全：点数条件写在 UPDATE 里）。"""
+    """购买炸弹特效：扣点数并覆盖当前特效，有效期 = 现在 + days 天（并发安全：点数条件写在 UPDATE 里）。"""
     assert _pool is not None
-    if u.get("points", 0) < BOMB_PRICE:
+    price = item_price(style)
+    if price is None:
+        raise ShopError("item_unavailable")
+    days = STORE_ITEMS[style]["days"]
+    if u.get("points", 0) < price:
         raise ShopError("item_points")
     async with _pool.acquire() as con, con.transaction():
         row = await con.fetchrow(
             """UPDATE users SET points = points - $2, bomb_style = $3, bomb_until = now() + make_interval(days => $4)
                WHERE id = $1 AND points >= $2 RETURNING points, bomb_style, bomb_until""",
-            u["id"], BOMB_PRICE, style, BOMB_DAYS,
+            u["id"], price, style, days,
         )
         if row is None:
             raise ShopError("item_points")
         await con.execute(
             "INSERT INTO bomb_purchases (user_id, style, price_paid, expires_at) VALUES ($1, $2, $3, $4)",
-            u["id"], style, BOMB_PRICE, row["bomb_until"],
+            u["id"], style, price, row["bomb_until"],
         )
     u["points"] = row["points"]
     u["bombStyle"], u["bombUntil"] = row["bomb_style"], _ms(row["bomb_until"])
@@ -546,8 +637,58 @@ def active_bomb(u: dict | None) -> str:
     return u["bombStyle"] if u.get("bombUntil", 0) > time.time() * 1000 else ""
 
 
+def active_boost(u: dict | None, kind: str) -> int:
+    """当前生效的加成倍率（百分比）；没有或已过期返回 100。kind = 'exp' / 'points'。"""
+    if not u:
+        return 100
+    pct = u.get(kind + "Boost", 100)
+    return pct if pct in (150, 200, 300) and u.get(kind + "BoostUntil", 0) > time.time() * 1000 else 100
+
+
+def boosted(amount: int, pct: int) -> int:
+    return amount * pct // 100 if pct > 100 else amount
+
+
+def boost_shop() -> dict:
+    """price 为 None 表示物品不可用。"""
+    return {"cards": [{"id": cid, "kind": STORE_ITEMS[cid]["kind"], "pct": STORE_ITEMS[cid]["pct"],
+                       "price": STORE_ITEMS[cid]["price"], "hours": STORE_ITEMS[cid].get("hours")} for cid in BOOST_IDS]}
+
+
+async def _buy_boost(u: dict, item: str) -> dict:
+    """购买加成卡：同一倍率顺延 24 小时，不同倍率替换（从现在起 24 小时）。点数条件写在 UPDATE 里（并发安全）。"""
+    assert _pool is not None
+    kind, pct = BOOST_IDS[item]
+    price = item_price(item)
+    if price is None:
+        raise ShopError("item_unavailable")
+    hours = STORE_ITEMS[item]["hours"]
+    if u.get("points", 0) < price:
+        raise ShopError("item_points")
+    col = "exp_boost" if kind == "exp" else "points_boost"
+    async with _pool.acquire() as con, con.transaction():
+        row = await con.fetchrow(
+            f"""UPDATE users SET points = points - $2,
+                   {col}_until = CASE WHEN {col} = $3 AND {col}_until > now() THEN {col}_until ELSE now() END
+                                 + make_interval(hours => $4),
+                   {col} = $3
+               WHERE id = $1 AND points >= $2 RETURNING points, {col} AS pct, {col}_until AS until""",
+            u["id"], price, pct, hours,
+        )
+        if row is None:
+            raise ShopError("item_points")
+        await con.execute(
+            "INSERT INTO boost_purchases (user_id, kind, pct, price_paid, expires_at) VALUES ($1, $2, $3, $4, $5)",
+            u["id"], kind, pct, price, row["until"],
+        )
+    u["points"] = row["points"]
+    u[kind + "Boost"], u[kind + "BoostUntil"] = row["pct"], _ms(row["until"])
+    return u
+
+
 def bomb_shop() -> dict:
-    return {"styles": list(BOMB_STYLES), "price": BOMB_PRICE, "days": BOMB_DAYS}
+    """price 为 None 表示物品不可用。"""
+    return {"styles": [{"id": st, "price": STORE_ITEMS[st]["price"], "days": STORE_ITEMS[st].get("days")} for st in BOMB_STYLES]}
 
 
 async def buy_item(u: dict, item: object) -> dict:
@@ -556,7 +697,11 @@ async def buy_item(u: dict, item: object) -> dict:
     assert _pool is not None
     if item in BOMB_STYLES:
         return await _buy_bomb(u, str(item))
+    if isinstance(item, str) and item in BOOST_IDS:
+        return await _buy_boost(u, item)
     if item == "rename":
+        if RENAME_CARD_PRICE is None:
+            raise ShopError("item_unavailable")
         if u.get("points", 0) < RENAME_CARD_PRICE:
             raise ShopError("item_points")
         row = await _pool.fetchrow(
@@ -704,12 +849,27 @@ def record_match(result: dict) -> None:
     humans = []
     for p in result["players"]:
         # 机器人、主动退出的玩家：没有任何奖励
-        exp, points = (0, 0) if p["isBot"] or p.get("quit") else reward_for(p["win"], p["kills"], p.get("rescues", 0), p["place"])
+        none = p["isBot"] or p.get("quit")
+        loss_pct = None if none or p["win"] else random.randint(*LOSS_POINTS_PCT)
+        exp, points = (0, 0) if none else reward_for(p["win"], p["kills"], p.get("rescues", 0), p["place"], loss_pct)
+        u = None if p["isBot"] else _users.get(p["id"])
+        # 加成卡（按结算时刻是否在有效期内）
+        eb, pb = active_boost(u, "exp"), active_boost(u, "points")
+        exp = boosted(exp, eb)
+        # 点数加成：连杀 + 复活赛排名 + 点数卡，百分比直接相加
+        bonus = {"streak": streak_bonus(p["win"], p.get("streak", 0)), "rank": int(p.get("rankBonus", 0) or 0), "card": pb - 100}
+        points = points * (100 + sum(bonus.values())) // 100
         p["exp"], p["points"] = exp, points
+        if loss_pct is not None:
+            p["lossPct"] = loss_pct
+        if eb > 100 and exp:
+            p["expBoost"] = eb
+        if points and any(bonus.values()):
+            p["bonus"] = {k: v for k, v in bonus.items() if v}
+            p["pointsPct"] = 100 + sum(bonus.values())
         if p["isBot"]:
             continue
         humans.append(p)
-        u = _users.get(p["id"])
         if u:
             u["stats"]["games"] += 1
             u["stats"]["wins"] += 1 if p["win"] else 0

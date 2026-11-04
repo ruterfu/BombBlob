@@ -48,6 +48,7 @@
         </div>
       </div>
     </div>
+    <div class="ver-tag" id="ver-login"></div>
     <div class="corner-lang"><i data-icon="globe"></i><div class="lang-seg"><button data-lang="zh">简体中文</button><button data-lang="zh-HK">繁體中文</button><button data-lang="ja">日本語</button><button data-lang="en">English</button></div></div>
     <div class="corner-tip"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <span data-i18n="tip.move"></span>　<kbd>SPACE</kbd> <span data-i18n="tip.bomb"></span></div>
   </section>
@@ -76,6 +77,7 @@
     <div class="hud-bar">
       <div class="player-badge" id="lobby-me"></div>
       <div class="bar-right">
+        <button class="currency boost-pill hidden" id="boost-pill"></button>
         <button class="currency points-pill" id="points-pill" data-i18n-title="shop.title"><i data-icon="gem"></i><b>0</b><small data-i18n="shop.open"></small></button>
 <div class="ping-badge"><i class="bars"><b></b><b></b><b></b><b></b></i><span>--</span><small>ms</small></div>
         <div class="currency online" id="online-pill"><i class="dot"></i><b>0</b><small data-i18n="lobby.online"></small></div>
@@ -86,6 +88,7 @@
         <button class="btn btn-icon btn-red-icon" id="btn-logout" data-i18n-title="title.logout"><i data-icon="logout"></i></button>
       </div>
     </div>
+    <div class="ver-tag" id="ver-lobby"></div>
     <div class="lobby-actions">
       <button class="btn btn-yellow btn-mega" id="btn-quick"><span class="big"><i data-icon="bolt"></i><span data-i18n="lobby.quick"></span></span><small data-i18n="lobby.quickSub"></small></button>
       <button class="btn btn-pink btn-mega" id="btn-create"><span class="big"><i data-icon="plus"></i><span data-i18n="lobby.create"></span></span><small data-i18n="lobby.createSub"></small></button>
@@ -131,6 +134,7 @@
       <div class="opt-rows">
         <div class="opt-row"><span data-i18n="opt.mode"></span><div class="seg" id="set-mode"><button data-v="ffa" data-i18n="mode.ffa"></button><button data-v="team" data-i18n="mode.team"></button></div></div>
         <div class="opt-row"><span data-i18n="opt.items"></span><div class="seg" id="set-items"><button data-v="1" data-i18n="items.on"></button><button data-v="0" data-i18n="items.off"></button></div></div>
+        <div class="opt-row"><span data-i18n="opt.revive"></span><div class="seg" id="set-revive"><button data-v="1" data-i18n="revive.on"></button><button data-v="0" data-i18n="revive.off"></button></div></div>
         <div class="opt-row"><span data-i18n="opt.shrink"></span><div class="seg" id="set-shrink"><button data-v="1" data-i18n="shrink.on"></button><button data-v="0" data-i18n="shrink.off"></button></div></div>
         <div class="opt-row"><span data-i18n="opt.time"></span><div class="seg" id="set-time"><button data-v="3" data-i18n="time.3"></button><button data-v="5" data-i18n="time.5"></button><button data-v="10" data-i18n="time.10"></button></div></div>
       </div>
@@ -221,6 +225,7 @@
       <div class="opt-rows">
         <div class="opt-row"><span data-i18n="opt.mode"></span><div class="seg" id="create-mode"><button data-v="ffa" class="on" data-i18n="mode.ffa"></button><button data-v="team" data-i18n="mode.team"></button></div></div>
         <div class="opt-row"><span data-i18n="opt.items"></span><div class="seg" id="create-items"><button data-v="1" class="on" data-i18n="items.on"></button><button data-v="0" data-i18n="items.off"></button></div></div>
+        <div class="opt-row"><span data-i18n="opt.revive"></span><div class="seg" id="create-revive"><button data-v="1" data-i18n="revive.on"></button><button data-v="0" class="on" data-i18n="revive.off"></button></div></div>
         <div class="opt-row"><span data-i18n="opt.shrink"></span><div class="seg" id="create-shrink"><button data-v="1" class="on" data-i18n="shrink.on"></button><button data-v="0" data-i18n="shrink.off"></button></div></div>
         <div class="opt-row"><span data-i18n="opt.time"></span><div class="seg" id="create-time"><button data-v="3" data-i18n="time.3"></button><button data-v="5" data-i18n="time.5"></button><button data-v="10" class="on" data-i18n="time.10"></button></div></div>
       </div>
@@ -278,6 +283,8 @@
   </div>
 
   <!-- 断线重连 -->
+  <!-- 开局：等待所有玩家加载完成（连接就绪）后才开始倒计时 -->
+  <div class="reconnect wait-start hidden" id="wait-start"><div class="box"><div class="spinner"></div><b data-i18n="wait.title"></b><div class="wait-list" id="wait-list"></div><small id="wait-left"></small></div></div>
   <div class="reconnect hidden" id="reconnect"><div class="box"><div class="spinner"></div><b id="reconnect-text"></b></div></div>
 
   <div class="modal hidden" id="pw-modal">

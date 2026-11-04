@@ -37,6 +37,12 @@ const ENV = {
   desert: { sky: ['#b45a32', '#f4d49c'], surround: 'snow', sea: '#d0ac74', land: '#c49c62', deco: 'palm', mote: '#ffe0a8', moteKind: 'dust', bloom: 0.35, sun: '#ffd6a0', dark: false },
   harbor: { sky: ['#050a14', '#1d3552'], surround: 'sea', sea: '#0f2a40', land: '#1f262e', deco: 'pipe', mote: '#9fd8ff', moteKind: 'spark', bloom: 0.75, sun: '#c4d8ff', dark: true },
   temple: { sky: ['#5f86d0', '#ffe4c8'], surround: 'sea', sea: '#e9eff8', land: '#d8ccb0', deco: 'crystal', mote: '#fff3c8', moteKind: 'dust', bloom: 0.4, sun: '#fff0d8', dark: false },
+  sakura: { sky: ['#6a7fc8', '#ffd6e4'], surround: 'sea', sea: '#7fb8c8', land: '#7a9a5a', deco: 'sakura', mote: '#ffc2d8', moteKind: 'dust', bloom: 0.4, sun: '#ffe8f0', dark: false },
+  mine: { sky: ['#07080c', '#2a2016'], surround: 'lava', sea: '#3a2a1a', land: '#2a2420', deco: 'rock', mote: '#ffcf6a', moteKind: 'ember', bloom: 0.7, sun: '#ffd8a0', dark: true },
+  glacier: { sky: ['#061428', '#1f6a6a'], surround: 'snow', sea: '#b8d4e8', land: '#d4e4f0', deco: 'pine', mote: '#9affd8', moteKind: 'snow', bloom: 0.65, sun: '#c8f0ff', dark: true },
+  starport: { sky: ['#02030a', '#1a2a5a'], surround: 'grid', sea: '#060a1a', land: '#10162a', deco: 'crystal', mote: '#9fd8ff', moteKind: 'spark', bloom: 0.9, sun: '#d0e0ff', dark: true },
+  arena: { sky: ['#e07a3a', '#ffe6b0'], surround: 'snow', sea: '#d8b47a', land: '#c8a068', deco: 'palm', mote: '#fff0c0', moteKind: 'dust', bloom: 0.4, sun: '#fff0c8', dark: false },
+  volcano: { sky: ['#120606', '#5a1a0a'], surround: 'lava', sea: '#ff4a10', land: '#2a1a16', deco: 'rock', mote: '#ff8a3a', moteKind: 'ember', bloom: 0.85, sun: '#ffb890', dark: true },
 };
 ENV.candy = ENV.foundry;
 ENV.lava = ENV.foundry;
@@ -931,6 +937,9 @@ export class GameScene {
     let nf = 0, ni = 0;
     this.conveyors = [];
     this.teleporters = [];
+    this.pads = [];
+    this.vents = [];
+    this.warns = [];
     const arrowTex = arrowTexture(th.conveyor);
     this.arrowTex = arrowTex;
     for (let y = 0; y < H; y++) {
@@ -981,6 +990,42 @@ export class GameScene {
           board.add(tg);
           this.teleporters.push({ ring, ring2, disc });
         }
+        if (c === 's') {
+          // 补给台：发光底座 + 旋转的光环
+          const g = new THREE.Group();
+          const base = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.48, 0.08, 6), pbr('#2a3550', { metalness: 0.7, roughness: 0.35 }));
+          base.position.y = 0.04;
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.035, 6, 6), new THREE.MeshStandardMaterial({ color: '#7dffb0', emissive: '#3dff8a', emissiveIntensity: 1.2 }));
+          ring.rotation.x = -Math.PI / 2;
+          ring.position.y = 0.1;
+          g.add(base, ring);
+          g.position.set(this.tx(x), 0, this.tz(y));
+          board.add(g);
+          this.pads.push(ring);
+        } else if (c === 'f') {
+          // 火焰喷口：铁栅格 + 暗红光
+          const g = new THREE.Group();
+          const grate = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.42, 0.06, 16), pbr('#2b2522', { metalness: 0.8, roughness: 0.5 }));
+          grate.position.y = 0.03;
+          const glow = new THREE.Mesh(new THREE.CircleGeometry(0.26, 16), new THREE.MeshBasicMaterial({ color: '#ff5a1f', transparent: true, opacity: 0.6 }));
+          glow.rotation.x = -Math.PI / 2;
+          glow.position.y = 0.065;
+          for (let k = 0; k < 3; k++) {
+            const bar = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.03, 0.05), pbr('#1a1514', { metalness: 0.8 }));
+            bar.position.set(0, 0.08, (k - 1) * 0.16);
+            g.add(bar);
+          }
+          g.add(grate, glow);
+          g.position.set(this.tx(x), 0, this.tz(y));
+          board.add(g);
+          this.vents.push(glow);
+        } else if (c === 'w' || c === 'u') {
+          // 冰墙闸门的地槽
+          const slot = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshBasicMaterial({ color: '#8fe8ff', transparent: true, opacity: 0.22 }));
+          slot.rotation.x = -Math.PI / 2;
+          slot.position.set(this.tx(x), 0.004, this.tz(y));
+          board.add(slot);
+        }
       }
     }
     floor.count = nf;
@@ -1021,12 +1066,23 @@ export class GameScene {
       new THREE.MeshStandardMaterial({ map: barrelTexture(), metalness: 0.45, roughness: 0.45, emissive: '#3a0800', emissiveIntensity: 0.4 }),
       N,
     );
-    for (const m of [this.steels, this.barrels]) { m.count = 0; m.castShadow = m.receiveShadow = true; board.add(m); }
+    // 金色宝箱、冰墙闸门
+    this.chests = new THREE.InstancedMesh(
+      new RoundedBoxGeometry(0.8, 0.74, 0.8, 2, 0.08),
+      new THREE.MeshStandardMaterial({ color: '#e8b230', metalness: 0.75, roughness: 0.3, emissive: '#6a4000', emissiveIntensity: 0.5 }),
+      N,
+    );
+    this.gateMesh = new THREE.InstancedMesh(
+      new RoundedBoxGeometry(0.96, 0.9, 0.96, 2, 0.06),
+      new THREE.MeshStandardMaterial({ color: '#a8e8ff', metalness: 0.1, roughness: 0.08, transparent: true, opacity: 0.78, emissive: '#3ab8e0', emissiveIntensity: 0.35 }),
+      N,
+    );
+    for (const m of [this.steels, this.barrels, this.chests, this.gateMesh]) { m.count = 0; m.castShadow = m.receiveShadow = true; board.add(m); }
     this.liquid = new THREE.InstancedMesh(
       new THREE.BoxGeometry(1, 0.12, 1),
       new THREE.MeshStandardMaterial({
         color: th.liquid, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.88,
-        emissive: th.liquidEmissive, emissiveIntensity: info.theme === 'lava' ? 0.9 : info.theme === 'frost' ? 0.35 : 0,
+        emissive: th.liquidEmissive, emissiveIntensity: info.theme === 'lava' || info.theme === 'volcano' ? 0.9 : info.theme === 'frost' ? 0.35 : 0,
       }),
       N,
     );
@@ -1245,7 +1301,7 @@ export class GameScene {
   rebuildBlocks(k) {
     this.blockStr = k;
     const dummy = new THREE.Object3D();
-    let nw = 0, nc = 0, nl = 0, nb = 0, ns = 0, ne = 0;
+    let nw = 0, nc = 0, nl = 0, nb = 0, ns = 0, ne = 0, ng = 0, nq = 0;
     if (!this.statics) this.buildStatics(k);
     this.wallSlots = new Map();
     this.bushSlots = new Map();
@@ -1279,6 +1335,14 @@ export class GameScene {
         dummy.position.y = 0.41;
         dummy.updateMatrix();
         this.steels.setMatrixAt(ns++, dummy.matrix);
+      } else if (c === 'g') {
+        dummy.position.y = 0.37;
+        dummy.updateMatrix();
+        this.chests.setMatrixAt(nq++, dummy.matrix);
+      } else if (c === 'w') {
+        dummy.position.y = 0.45;
+        dummy.updateMatrix();
+        this.gateMesh.setMatrixAt(ng++, dummy.matrix);
       } else if (c === 'e') {
         dummy.position.y = 0.39;
         dummy.rotation.y = (x * 5 + y * 3) % 6;
@@ -1303,7 +1367,9 @@ export class GameScene {
     this.bushes.count = nb;
     this.steels.count = ns;
     this.barrels.count = ne;
-    for (const m of [this.walls, this.crates, this.liquid, this.bushes, this.wallEdges, this.crateEdges, this.steels, this.barrels]) {
+    this.chests.count = nq;
+    this.gateMesh.count = ng;
+    for (const m of [this.walls, this.crates, this.liquid, this.bushes, this.wallEdges, this.crateEdges, this.steels, this.barrels, this.chests, this.gateMesh]) {
       m.instanceMatrix.needsUpdate = true;
       m.computeBoundingSphere();
     }
@@ -1428,6 +1494,18 @@ export class GameScene {
       case 'rescue':
         this.burst(e.x, e.y, 0.6, 22, ['#3ee08f', '#ffffff', '#36d6ff'], 3.5, 0.08);
         break;
+      case 'respawn': {
+        // 复活赛：恢复死亡动画改过的透明度
+        const p = this.players.get(e.id);
+        if (p) {
+          p.dieT = null;
+          p.bodyMat.opacity = 1;
+          p.bodyMat.transparent = false;
+          p.bodyMat.needsUpdate = true;
+        }
+        this.burst(e.x, e.y, 0.5, 20, ['#ffffff', '#ffd24a', '#36d6ff'], 3.5, 0.08);
+        break;
+      }
       case 'pop':
         this.shake = Math.min(0.3, this.shake + 0.12);
         this.burst(e.x, e.y, 0.6, 26, ['#bfeaff', '#ffffff', '#ff4d5e'], 4.5, 0.09);
@@ -1435,6 +1513,33 @@ export class GameScene {
       case 'steel':
         this.burst(e.x, e.y, 0.5, 12, ['#9aa0aa', '#d6dbe3', '#ffb547'], 3.5, 0.07);
         break;
+      case 'chest':
+        this.burst(e.x, e.y, 0.5, 22, ['#ffd24a', '#fff2b0', '#e8a020'], 4, 0.08);
+        break;
+      case 'grow':
+        this.burst(e.x, e.y, 0.3, 8, ['#ffc2d8', th.bush], 1.8, 0.07);
+        break;
+      case 'gate':
+        this.burst(e.x, e.y, 0.4, e.up ? 12 : 8, ['#bff2ff', '#ffffff'], e.up ? 3 : 2, 0.07);
+        break;
+      case 'supply':
+        this.burst(e.x, e.y, 0.9, 16, ['#7dffb0', '#ffffff'], 3, 0.07);
+        break;
+      case 'warn': {
+        // 机关预警：在即将喷火 / 落下陨石 / 升起冰墙的格子上闪烁
+        const mat = new THREE.MeshBasicMaterial({ color: e.g ? '#8fe8ff' : '#ff3b2f', transparent: true, opacity: 0.5, depthWrite: false });
+        const geo = new THREE.PlaneGeometry(0.92, 0.92);
+        const grp = new THREE.Group();
+        for (const i of e.c) {
+          const m = new THREE.Mesh(geo, mat);
+          m.rotation.x = -Math.PI / 2;
+          m.position.set(this.tx(i % this.W), 0.02, this.tz(Math.floor(i / this.W)));
+          grp.add(m);
+        }
+        this.board?.add(grp);
+        this.warns.push({ grp, mat, geo, t0: this.clock.elapsedTime, dur: e.t });
+        break;
+      }
       case 'barrel':
         this.shake = Math.min(0.45, this.shake + 0.2);
         this.burst(e.x, e.y, 0.5, 26, ['#ff5a1f', '#ffd27a', '#3a3a3a'], 5, 0.12);
@@ -1871,6 +1976,21 @@ export class GameScene {
       tp.ring2.position.y = 0.05 + (Math.sin(t * 3) * 0.5 + 0.5) * 0.25;
       tp.disc.material.opacity = 0.4 + Math.sin(t * 4) * 0.15;
     }
+    for (const r of this.pads || []) r.rotation.z = t * 1.5;
+    for (const v of this.vents || []) v.material.opacity = 0.45 + Math.sin(t * 2.5) * 0.2;
+    if (this.warns?.length) {
+      this.warns = this.warns.filter((w) => {
+        const k = (t - w.t0) / w.dur;
+        if (k >= 1 || !this.board) {
+          this.board?.remove(w.grp);
+          w.geo.dispose();
+          w.mat.dispose();
+          return false;
+        }
+        w.mat.opacity = 0.2 + 0.45 * (0.5 + 0.5 * Math.sin(t * (8 + k * 14)));
+        return true;
+      });
+    }
     if (this.arrowTex) this.arrowTex.offset.y = (t * 1.2) % 1;
     if (this.liquid) this.liquid.position.y = Math.sin(t * 1.6) * 0.03;
 
@@ -2142,6 +2262,12 @@ function makeDeco(kind, rng) {
       side.rotation.z = Math.PI / 2;
       break;
     }
+    case 'sakura':
+      add(new THREE.CylinderGeometry(0.1, 0.16, 1.1, 7), '#5a3a2e', 0, 0.55, 0, { roughness: 0.9 });
+      add(new THREE.IcosahedronGeometry(0.72, 0), '#f4a6c4', 0, 1.4, 0, { flatShading: true, roughness: 0.8 });
+      add(new THREE.IcosahedronGeometry(0.5, 0), '#ffc8dc', 0.3, 1.85, 0.1, { flatShading: true, roughness: 0.8 });
+      add(new THREE.IcosahedronGeometry(0.42, 0), '#e88ab0', -0.32, 1.7, -0.12, { flatShading: true, roughness: 0.8 });
+      break;
     case 'rock':
       for (let k = 0; k < 3; k++) {
         const m = add(new THREE.DodecahedronGeometry(0.4 + rng() * 0.3), '#3a3532', (rng() - 0.5) * 0.9, 0.25, (rng() - 0.5) * 0.9, { flatShading: true, roughness: 0.95 });

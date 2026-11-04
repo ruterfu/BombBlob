@@ -12,6 +12,7 @@ from pathlib import Path
 from aiohttp import web
 
 from . import secure, store, textrule
+from . import VERSION
 from .config import Config, load_dotenv
 from .lobby import Lobby
 from .maps import map_summaries
@@ -90,7 +91,7 @@ def _login_ok(user: dict, token: str, session: str, created: bool) -> dict:
 async def login_info(request: web.Request) -> web.Response:
     """登录页进入时请求：前端据此决定显示哪些登录方式。"""
     cfg = request.app[CFG_KEY]
-    return web.json_response({"guest": cfg.login_guest, "github": cfg.login_github})
+    return web.json_response({"guest": cfg.login_guest, "github": cfg.login_github, "version": VERSION})
 
 
 async def guest_login(request: web.Request) -> web.Response:

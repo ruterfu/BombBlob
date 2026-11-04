@@ -40,10 +40,12 @@ export async function sealedPost(url, body) {
   const [key, ek] = await Promise.all([aesKey(raw), rsaKey().then((pk) => crypto.subtle.encrypt({ name: 'RSA-OAEP' }, pk, raw))]);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(body)));
+  // 15 秒超时：网络或服务器卡住时不会无限等待（超时按网络错误处理，界面会恢复登录表单）
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ek: b64(ek), iv: b64(iv), ct: b64(ct) }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
   });
   const wire = await r.json().catch(() => ({}));
   if (!wire.ct) return { status: r.status, data: wire };

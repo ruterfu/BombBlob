@@ -3,7 +3,7 @@
 
 const DIRS = { up: [0, -1], right: [1, 0], down: [0, 1], left: [-1, 0] };
 const CONVEYOR = { '^': 'up', v: 'down', '<': 'left', '>': 'right' };
-const BLOCKING = new Set(['#', 'x', 'm', 'e', 'Y', 'H', '~']);
+const BLOCKING = new Set(['#', 'x', 'm', 'e', 'g', 'w', 'Y', 'H', '~']);
 const FACING = { u: 'up', d: 'down', l: 'left', r: 'right' };
 const rnd = (v) => Math.floor(v + 0.5);
 const EPS = 1e-6;

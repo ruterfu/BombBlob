@@ -84,12 +84,62 @@ export const THEMES = {
     flameOuter: '#ff7a1f', flameInner: '#ffe6a8',
   },
 };
+Object.assign(THEMES, {
+  sakura: {
+    floorA: '#8aa868', floorB: '#819f60', ice: '#a9d4ee',
+    wall: '#7a6070', wallTop: '#e8c8d4',
+    crate: '#b0784a', crateLine: '#5a3420',
+    liquid: '#4aa8c0', liquidEmissive: '#000000',
+    bush: '#d86a9a', conveyor: '#3a3d44', tele: '#ffb0d0',
+    flameOuter: '#ff6a8a', flameInner: '#ffe0ea',
+  },
+  mine: {
+    floorA: '#3a332c', floorB: '#342d27', ice: '#a9d4ee',
+    wall: '#4a4038', wallTop: '#7a6a58',
+    crate: '#6a4a2a', crateLine: '#2a1a0c',
+    liquid: '#3a2a1a', liquidEmissive: '#000000',
+    bush: '#4a4a3a', conveyor: '#25282e', tele: '#ffcf6a',
+    flameOuter: '#ffa020', flameInner: '#fff0a0',
+  },
+  glacier: {
+    floorA: '#c8dceb', floorB: '#bcd2e2', ice: '#7ad8e8',
+    wall: '#3a5a78', wallTop: '#9ad8e8',
+    crate: '#6aa8c8', crateLine: '#1f4a6a',
+    liquid: '#2a7aa8', liquidEmissive: '#0a3a5a',
+    bush: '#3a6a6a', conveyor: '#2a3a4a', tele: '#9affd8',
+    flameOuter: '#5ae0ff', flameInner: '#eaffff',
+  },
+  starport: {
+    floorA: '#1a2138', floorB: '#151b30', ice: '#3d6dff',
+    wall: '#2a3458', wallTop: '#5ab8ff', wallEmissive: '#081430',
+    crate: '#c8d0e0', crateLine: '#3a4660',
+    liquid: '#05070f', liquidEmissive: '#000000',
+    bush: '#2a3a6a', conveyor: '#1e2440', tele: '#7dffb0',
+    flameOuter: '#ff7a3a', flameInner: '#ffe8c8',
+  },
+  arena: {
+    floorA: '#d8b47a', floorB: '#ceaa70', ice: '#a9d4ee',
+    wall: '#9a7048', wallTop: '#e0c090',
+    crate: '#8a5a30', crateLine: '#40240e',
+    liquid: '#3aa0b0', liquidEmissive: '#000000',
+    bush: '#8a9a3a', conveyor: '#3a3d44', tele: '#ffcf5a',
+    flameOuter: '#ff5a1a', flameInner: '#ffd890',
+  },
+  volcano: {
+    floorA: '#3a2a26', floorB: '#33241f', ice: '#a9d4ee',
+    wall: '#2a1e1c', wallTop: '#6a3a28',
+    crate: '#5a3a2a', crateLine: '#24140c',
+    liquid: '#ff5a1a', liquidEmissive: '#ff3a0a',
+    bush: '#4a3a2a', conveyor: '#25282e', tele: '#ffb347',
+    flameOuter: '#ff4a10', flameInner: '#ffd27a',
+  },
+});
 THEMES.candy = THEMES.foundry; // 兼容旧 id
 
 export const POWERUPS = {
   bomb: { icon: 'bomb', name: '炸弹 · 可连放 +1', color: '#5b7cff' },
   fire: { icon: 'flame', name: '爆炸威力 +1', color: '#ff7a1f' },
-  max: { icon: 'burst', name: '威力满级', color: '#ff3b3b' },
+  max: { icon: 'burst', name: '威力 +50%', color: '#ff3b3b' },
   speed: { icon: 'shoe', name: '红色跑鞋 · 速度 +5%', color: '#ff3b3b' },
   slow: { icon: 'shoe', name: '绿色跑鞋 · 速度 -5%', color: '#2fd06a' },
   kick: { icon: 'kick', name: '踢弹', color: '#c9a04a' },
@@ -470,6 +520,25 @@ export function drawMapPreview(canvas, map) {
         box(x, y, c === 'H' ? th.wallTop : '#3f6a34', c === 'H' ? shade(th.wall, -0.2) : '#2a4a24', c === 'Y' ? s * 0.12 : 0, c === 'H' ? 0.45 : 0.3);
       } else if (c === 'm') {
         box(x, y, '#7d8590', '#3d434d', s * 0.08, 0.24);
+      } else if (c === 'g') {
+        box(x, y, '#f2c23a', '#8a5a10', s * 0.1, 0.22);
+      } else if (c === 'w') {
+        box(x, y, '#c8f2ff', '#5ab0d0', 0, 0.3);
+      } else if (c === 'u') {
+        ctx.strokeStyle = '#8fe8ff';
+        ctx.lineWidth = Math.max(1, s * 0.12);
+        ctx.strokeRect(ox + x * s + s * 0.15, oy + y * s + s * 0.15, s * 0.7, s * 0.7);
+      } else if (c === 's') {
+        ctx.fillStyle = '#3dff8a';
+        ctx.beginPath(); ctx.arc(cx, cy, s * 0.36, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(cx - s * 0.08, cy - s * 0.22, s * 0.16, s * 0.44);
+        ctx.fillRect(cx - s * 0.22, cy - s * 0.08, s * 0.44, s * 0.16);
+      } else if (c === 'f') {
+        ctx.fillStyle = '#2b2522';
+        ctx.beginPath(); ctx.arc(cx, cy, s * 0.42, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ff5a1f';
+        ctx.beginPath(); ctx.arc(cx, cy, s * 0.24, 0, Math.PI * 2); ctx.fill();
       } else if (c === 'e') {
         ctx.fillStyle = '#7a1510';
         ctx.beginPath(); ctx.arc(cx, cy - s * 0.1, s * 0.4, 0, Math.PI * 2); ctx.fill();

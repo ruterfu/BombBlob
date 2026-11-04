@@ -103,12 +103,16 @@ class DodgeTests(unittest.TestCase):
         g = corridor_game("hard")
         ai = g.players[0]
         seen_spur = False
+        y_at_b = None  # B 爆炸那一刻 AI 所在的行
         for _ in range(int(3.2 * TICK_RATE)):
+            b_alive = any(b.id == 2 for b in g.bombs)
             g.tick()
             seen_spur = seen_spur or round(ai.y) >= 6
+            if b_alive and not any(b.id == 2 for b in g.bombs):
+                y_at_b = round(ai.y)
         self.assertTrue(seen_spur, "应先躲进岔路")
         self.assertTrue(ai.alive and ai.trapped <= 0, f"难：应利用时间差躲过两颗炸弹，结果在 ({ai.x:.2f},{ai.y:.2f})")
-        self.assertEqual(round(ai.y), 5, "B 爆炸前应回到走廊")
+        self.assertEqual(y_at_b, 5, "B 爆炸前应回到走廊")
 
     def test_plain_search_cannot_solve_it(self):
         # 普通的「找最近的安全格」搜不到出路（所有格子迟早都会着火）→ 简单会被炸到

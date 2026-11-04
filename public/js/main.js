@@ -235,7 +235,7 @@ function renderShop() {
   const list = $('#shop-list');
   list.innerHTML = '';
   // 道具：更名卡（可叠加购买）
-  const price = state.renameCardPrice ?? 100;
+  const price = state.renameCardPrice; // null = 物品不可用
   const tools = document.createElement('div');
   tools.className = 'shop-tier';
   tools.innerHTML = `<div class="shop-tier-head" style="--tc:#36d6ff">${icon('card')}<span>${t('shop.items')}</span></div>`;
@@ -244,8 +244,8 @@ function renderShop() {
   const short = Math.max(0, price - (u.points || 0));
   card.innerHTML = `<div class="tool-ic">${icon('card')}</div><div class="nm">${t('item.rename')}</div>
     <p class="desc">${t('item.renameDesc')}</p>
-    <div class="pr">${icon('gem')}${t('shop.price', { n: price })}<span class="own">${t('shop.ownedCount', { n: u.renameCards ?? 0 })}</span></div>
-    ${short > 0 ? `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>` : `<button class="btn btn-yellow" data-act="buy">${t('shop.buy')}</button>`}`;
+    <div class="pr">${priceTag(price)}<span class="own">${t('shop.ownedCount', { n: u.renameCards ?? 0 })}</span></div>
+    ${price == null ? unavailableBtn() : short > 0 ? `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>` : `<button class="btn btn-yellow" data-act="buy">${t('shop.buy')}</button>`}`;
   card.querySelector('[data-act="buy"]')?.addEventListener('click', async () => {
     if (await confirmDialog(t('shop.confirm', { price, name: t('item.rename') }), { title: t('shop.title') })) send({ t: 'buy', item: 'rename' });
   });
@@ -254,6 +254,7 @@ function renderShop() {
   row0.appendChild(card);
   tools.appendChild(row0);
   list.appendChild(tools);
+  list.appendChild(boostShopSection(u));
   list.appendChild(bombShopSection(u));
   const groups = new Map();
   for (const it of shopItems()) (groups.get(it.level) || groups.set(it.level, []).get(it.level)).push(it);
@@ -294,37 +295,124 @@ function renderShop() {
     list.appendChild(sec);
   }
 }
-/** 商店：炸弹特效（纯画面；每次 200 点、有效 7 天；同一时间只有一种，再买会覆盖之前的） */
+/** 商店：炸弹特效（纯画面；同一时间只有一种，再买会覆盖之前的）。价格与天数来自 store_item.json，price 为 null 表示物品不可用 */
 function bombShopSection(u) {
-  const shop = state.bombShop || { styles: ['poison', 'water', 'gold'], price: 200, days: 7 };
+  const shop = state.bombShop || { styles: [] };
   const cur = u.bomb?.style || '';
+  const days0 = shop.styles.find((x) => x.days)?.days ?? 7;
   const sec = document.createElement('div');
   sec.className = 'shop-tier';
-  sec.innerHTML = `<div class="shop-tier-head" style="--tc:#b14dff">${icon('bomb')}<span>${t('bomb.section')}</span></div><p class="shop-note">${t('bomb.note', { days: shop.days })}</p>`;
+  sec.innerHTML = `<div class="shop-tier-head" style="--tc:#b14dff">${icon('bomb')}<span>${t('bomb.section')}</span></div><p class="shop-note">${t('bomb.note', { days: days0 })}</p>`;
   const row = document.createElement('div');
   row.className = 'shop-row';
-  for (const st of shop.styles) {
+  for (const { id: st, price, days } of shop.styles) {
     const active = cur === st;
     const card = document.createElement('div');
-    card.className = 'shop-card bomb-card' + (active ? ' equipped' : '');
+    card.className = 'shop-card bomb-card' + (active ? ' equipped' : '') + (price == null ? ' unavailable' : '');
     card.appendChild(bombPreview(st));
-    const short = Math.max(0, shop.price - (u.points || 0));
+    const short = Math.max(0, (price ?? 0) - (u.points || 0));
     const left = active ? timeLeft(u.bomb.until) : '';
+    const btn = price == null ? unavailableBtn()
+      : short > 0 ? `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>`
+      : `<button class="btn ${active ? 'btn-blue' : 'btn-yellow'}" data-act="buy">${active ? t('bomb.renew', { n: days }) : t('shop.buy')}</button>`;
     card.insertAdjacentHTML('beforeend', `<div class="nm">${esc(t('bomb.' + st))}</div>
       <p class="desc">${esc(t('bomb.' + st + 'Desc'))}</p>
-      <div class="pr">${icon('gem')}${t('shop.price', { n: shop.price })}<span class="own">${active ? esc(t('bomb.left', { t: left })) : esc(t('bomb.days', { n: shop.days }))}</span></div>
-      ${short > 0 ? `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>` : `<button class="btn ${active ? 'btn-blue' : 'btn-yellow'}" data-act="buy">${t(active ? 'bomb.renew' : 'shop.buy')}</button>`}`);
+      <div class="pr">${priceTag(price)}<span class="own">${active ? esc(t('bomb.left', { t: left })) : price == null ? '' : esc(t('bomb.days', { n: days }))}</span></div>
+      ${btn}`);
     card.querySelector('[data-act="buy"]')?.addEventListener('click', async () => {
       const name = t('bomb.' + st);
-      let msg = t('bomb.confirm', { price: shop.price, name, days: shop.days });
-      if (active) msg = t('bomb.confirmRenew', { price: shop.price, name, days: shop.days, t: timeLeft(u.bomb.until) });
-      else if (cur) msg = t('bomb.confirmReplace', { price: shop.price, name, days: shop.days, old: t('bomb.' + cur), t: timeLeft(u.bomb.until) });
+      let msg = t('bomb.confirm', { price, name, days });
+      if (active) msg = t('bomb.confirmRenew', { price, name, days, t: timeLeft(u.bomb.until) });
+      else if (cur) msg = t('bomb.confirmReplace', { price, name, days, old: t('bomb.' + cur), t: timeLeft(u.bomb.until) });
       if (await confirmDialog(msg, { title: t('shop.title') })) send({ t: 'buy', item: st });
     });
     row.appendChild(card);
   }
   sec.appendChild(row);
   return sec;
+}
+
+/** 商店左边：生效中的加成卡（经验卡 / 点数卡各一个图标 + 倍率），悬停显示剩余时间；都没有时隐藏 */
+function renderBoostPill() {
+  const el = $('#boost-pill');
+  const boosts = state.user?.boosts || {};
+  const now = Date.now();
+  const parts = [], tips = [];
+  for (const kind of ['exp', 'points']) {
+    const b = boosts[kind];
+    if (!b || b.until <= now) continue;
+    const name = t(kind === 'exp' ? 'boost.exp' : 'boost.points', { x: b.pct / 100 });
+    parts.push(`<span class="bk ${kind}">${icon(kind === 'exp' ? 'star' : 'gem')}<b>×${b.pct / 100}</b></span>`);
+    tips.push(t('boost.active', { name, t: timeLeft(b.until) }));
+  }
+  el.classList.toggle('hidden', !parts.length);
+  el.innerHTML = parts.join('');
+  el.title = tips.join('\n');
+}
+
+/** 购买成功提示里的商品名：加成卡 / 炸弹特效 / 头饰 */
+function boughtName(item) {
+  const card = state.boostShop?.cards?.find((c) => c.id === item);
+  if (card) return t(card.kind === 'exp' ? 'boost.exp' : 'boost.points', { x: card.pct / 100 });
+  return t((BOMB_FX[item] ? 'bomb.' : 'hat.') + item);
+}
+
+/** 价格标签；price 为 null（物品不可用）时显示「—」 */
+function priceTag(price) {
+  return price == null ? `<span class="na">—</span>` : `${icon('gem')}${t('shop.price', { n: price })}`;
+}
+function unavailableBtn() {
+  return `<button class="btn btn-gray" disabled>${t('shop.unavailable')}</button>`;
+}
+
+/** 商店：加成卡（经验 / 点数 ×1.5 / ×2 / ×3）。经验与点数各一个位置：同倍率顺延，不同倍率替换。
+ *  价格与时长来自 store_item.json，price 为 null 表示物品不可用 */
+function boostShopSection(u) {
+  const shop = state.boostShop || { cards: [] };
+  const h0 = shop.cards.find((c) => c.hours)?.hours ?? 24;
+  const sec = document.createElement('div');
+  sec.className = 'shop-tier';
+  sec.innerHTML = `<div class="shop-tier-head" style="--tc:#3ee08f">${icon('star')}<span>${t('boost.section')}</span></div><p class="shop-note">${t('boost.note', { h: h0 })}</p>`;
+  // 经验卡一排、点数卡一排
+  const rows = {};
+  for (const c of shop.cards) {
+    const row = rows[c.kind] || (rows[c.kind] = sec.appendChild(Object.assign(document.createElement('div'), { className: 'shop-row' })));
+    const cur = u.boosts?.[c.kind];
+    const active = cur?.pct === c.pct;
+    const mult = c.pct / 100;
+    const h = c.hours;
+    const name = t(c.kind === 'exp' ? 'boost.exp' : 'boost.points', { x: mult });
+    const card = document.createElement('div');
+    card.className = 'shop-card tool boost-card ' + c.kind + (active ? ' equipped' : '') + (c.price == null ? ' unavailable' : '');
+    const short = Math.max(0, (c.price ?? 0) - (u.points || 0));
+    const btn = c.price == null ? unavailableBtn()
+      : short > 0 ? `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>`
+      : `<button class="btn ${active ? 'btn-blue' : 'btn-yellow'}" data-act="buy">${t(active ? 'boost.extend' : 'shop.buy', { h })}</button>`;
+    card.innerHTML = `<div class="tool-ic">${icon(c.kind === 'exp' ? 'star' : 'gem')}<b>×${mult}</b></div><div class="nm">${esc(name)}</div>
+      <p class="desc">${esc(t(c.kind === 'exp' ? 'boost.expDesc' : 'boost.pointsDesc', { x: mult, h: h ?? h0 }))}</p>
+      <div class="pr">${priceTag(c.price)}<span class="own">${active ? esc(t('bomb.left', { t: timeLeft(cur.until) })) : c.price == null ? '' : esc(t('boost.hours', { n: h }))}</span></div>
+      ${btn}`;
+    card.querySelector('[data-act="buy"]')?.addEventListener('click', async () => {
+      let msg = t('boost.confirm', { price: c.price, name, h });
+      if (active) msg = t('boost.confirmExtend', { price: c.price, name, h, t: timeLeft(cur.until) });
+      else if (cur) msg = t('boost.confirmReplace', { price: c.price, name, h, old: t(c.kind === 'exp' ? 'boost.exp' : 'boost.points', { x: cur.pct / 100 }), t: timeLeft(cur.until) });
+      if (await confirmDialog(msg, { title: t('shop.title') })) send({ t: 'buy', item: c.id });
+    });
+    row.appendChild(card);
+  }
+  return sec;
+}
+
+/** 结算：点数加成明细（连杀 / 复活赛排名 / 点数卡，百分比直接相加；失败时显示随机浮动） */
+function bonusLine(me) {
+  const parts = [];
+  if (me.lossPct) parts.push(t('bonus.loss', { n: me.lossPct }));
+  const b = me.bonus || {};
+  if (b.streak) parts.push(t('bonus.streak', { n: b.streak }));
+  if (b.rank) parts.push(t('bonus.rank', { n: b.rank }));
+  if (b.card) parts.push(t('bonus.card', { n: b.card }));
+  if (!parts.length) return '';
+  return `<div class="rw-bonus">${icon('gem')} ${parts.map(esc).join(' · ')}${me.pointsPct ? ` = <b>${me.pointsPct}%</b>` : ''}</div>`;
 }
 
 /** 剩余时间：X 天 Y 小时 / Y 小时 Z 分 */
@@ -380,6 +468,8 @@ function openShop() {
   openModal('#shop-modal');
 }
 $('#points-pill').onclick = openShop;
+$('#boost-pill').onclick = openShop;
+setInterval(renderBoostPill, 30000); // 到期后自动消失、剩余时间随之更新
 $('#btn-profile-shop').onclick = () => { $('#profile-modal').classList.add('hidden'); openShop(); };
 
 // ================= 启动 / 登录 =================
@@ -459,6 +549,8 @@ async function boot() {
     n.textContent = t('err.network');
   }
   state.loginCfg = cfg;
+  // 版本号（服务器 backend/__init__.py 的 VERSION）：登录页与大厅右上角
+  for (const el of [$('#ver-login'), $('#ver-lobby')]) el.textContent = cfg.version ? 'v' + cfg.version : '';
   $('#github-block').classList.toggle('hidden', !cfg.github);
   $('#guest-block').classList.toggle('hidden', !cfg.guest);
   $('#login-split').classList.toggle('hidden', !(cfg.guest && cfg.github));
@@ -501,6 +593,20 @@ function errText(e) {
   return s === key ? t('err.unknown') : s;
 }
 
+/** 登录页回到可操作状态：隐藏「正在恢复你的账号…」、显示登录表单。
+ *  GitHub 回跳时会先隐藏表单显示转圈；无论之后成功还是失败都要还原，
+ *  否则以后回到登录页（会话过期 / 服务器重启 / 被顶号）就只剩一个转圈，卡住不动。 */
+function resetLoginForm(notice) {
+  $('#login-loading').classList.add('hidden');
+  $('#login-form').classList.remove('hidden');
+  const n = $('#login-notice');
+  n.classList.toggle('hidden', !notice);
+  if (notice) n.textContent = notice;
+}
+
+/** 登录成功后等待连接建立的时间；超时（还停在登录页）就断开并提示，而不是无限等待 */
+const CONNECT_WAIT_MS = 12000;
+
 async function doLogin(fn, auto = false) {
   const btns = [$('#btn-guest'), $('#btn-id-login')];
   btns.forEach((b) => (b.disabled = true));
@@ -508,11 +614,11 @@ async function doLogin(fn, auto = false) {
     const data = await fn();
     state.user = data.user;
     adoptAccountLang(data.user);
+    resetLoginForm();
     showIdModal(data.user, data.created);
     startConnection(data);
   } catch (e) {
-    $('#login-loading').classList.add('hidden');
-    $('#login-form').classList.remove('hidden');
+    resetLoginForm();
     let text = errText(e);
     if (e instanceof UnknownIdError) shake($('#login-id'));
     const n = $('#login-notice');
@@ -556,10 +662,28 @@ function setReconnecting(on, attempt = 0) {
   if (scene) scene.frozen = on;
 }
 
-function startConnection(login) {
+/** 结束会话：关闭 WebSocket（不再重连）、清掉等待计时、隐藏重连遮罩。
+ *  WebSocket 只在登录成功后建立；回到登录页（退出 / 会话失效 / 连不上）时一定先调用这里。 */
+function endSession() {
+  clearTimeout(state.connWait);
   state.conn?.close();
-  state.conn = new Connection(login, {
+  state.conn = null;
+  setReconnecting(false);
+}
+
+function startConnection(login) {
+  endSession();
+  // 还在登录页时迟迟连不上（服务器不可用 / 被拦截）：回到登录表单并提示，而不是一直在后台静默重连
+  state.connWait = setTimeout(() => {
+    if (state.screen !== 'login' || state.conn?.online) return;
+    endSession();
+    $('#id-modal').classList.add('hidden');
+    resetLoginForm(t('err.network'));
+  }, CONNECT_WAIT_MS);
+  const conn = new Connection(login, {
     open: () => {
+      if (state.conn !== conn) return;
+      clearTimeout(state.connWait);
       setReconnecting(false);
       if (state.pendingLang) {
         send({ t: 'profile', lang: state.pendingLang });
@@ -568,18 +692,26 @@ function startConnection(login) {
     },
     message: onMessage,
     close: (code, attempt) => {
+      if (state.conn !== conn) return; // 已被替换 / 已结束的旧连接
       if (code === 4001) {
-        setReconnecting(false);
+        // 会话失效（服务器重启 / 过期）：结束会话，回到可操作的登录页
+        endSession();
+        $('#id-modal').classList.add('hidden');
+        resetLoginForm(t('conn.expired'));
+        if (state.loginCfg?.guest) $('#login-id').value = savedId();
         toast(t('conn.expired'), true);
         show('login');
       } else if (code === 4000) {
-        setReconnecting(false);
+        // 被别处登录顶掉：不再重连
+        endSession();
+        if (state.screen === 'login') resetLoginForm(t('conn.replaced'));
         toast(t('conn.replaced'), true);
       } else if (state.screen !== 'login') {
         setReconnecting(true, attempt);
       }
     },
   });
+  state.conn = conn;
 }
 
 const send = (msg) => state.conn?.send(msg);
@@ -595,6 +727,7 @@ function onMessage(m) {
       setShop(m.shop);
       state.renameCardPrice = m.renameCardPrice;
       state.bombShop = m.bombShop;
+      state.boostShop = m.boostShop;
       renderMe();
       if (!m.roomId) {
         // 服务器说我们不在任何房间（例如断线期间对局已结束）：以服务器为准离开房间 / 对局界面
@@ -622,7 +755,7 @@ function onMessage(m) {
       break;
     case 'bought':
       audio.fx('coin');
-      toast(m.item === 'rename' ? t('shop.boughtCard') : t('shop.bought', { name: t((BOMB_FX[m.item] ? 'bomb.' : 'hat.') + m.item) }));
+      toast(m.item === 'rename' ? t('shop.boughtCard') : t('shop.bought', { name: boughtName(m.item) }));
       break;
     case 'leaderboard':
       renderLeaderboard(m.list || []);
@@ -724,6 +857,7 @@ function renderMe() {
     audio.fx('coin');
   }
   lastCoins = u.points;
+  renderBoostPill();
   if (state.screen === 'lobby' || state.screen === 'room') stage?.setBombStyle(u.skin, u.bomb?.style); // 买了炸弹特效 / 换颜色后立即更新
   if (state.screen === 'lobby') stage?.showLobby(u);
 }
@@ -830,7 +964,7 @@ function segPicker(root, value, onPick, locked = false) {
   });
 }
 
-const createSel = { mapId: 'meadow', mode: 'ffa', items: true, shrink: true, time: 10 };
+const createSel = { mapId: 'meadow', mode: 'ffa', items: true, shrink: true, time: 10, revive: false };
 function openCreate() {
   $('#create-name').value = cleanText(t('room.defaultName', { name: state.user.name })) ?? '';
   $('#create-password').value = '';
@@ -838,7 +972,8 @@ function openCreate() {
     mapPicker($('#create-maps'), createSel.mapId, (id) => { createSel.mapId = id; draw(); });
     segPicker($('#create-mode'), createSel.mode, (v) => { createSel.mode = v; draw(); });
     segPicker($('#create-items'), createSel.items ? '1' : '0', (v) => { createSel.items = v === '1'; draw(); });
-    segPicker($('#create-shrink'), createSel.shrink ? '1' : '0', (v) => { createSel.shrink = v === '1'; draw(); });
+    segPicker($('#create-revive'), createSel.revive ? '1' : '0', (v) => { createSel.revive = v === '1'; draw(); });
+    segPicker($('#create-shrink'), createSel.shrink && !createSel.revive ? '1' : '0', (v) => { createSel.shrink = v === '1'; draw(); }, createSel.revive);
     segPicker($('#create-time'), String(createSel.time), (v) => { createSel.time = Number(v); draw(); });
   };
   draw();
@@ -919,7 +1054,9 @@ function renderRoom() {
   const locked = !isHost || !waiting;
   segPicker($('#set-mode'), r.settings.mode, (v) => send({ t: 'settings', mode: v }), locked);
   segPicker($('#set-items'), r.settings.items === false ? '0' : '1', (v) => send({ t: 'settings', items: v === '1' }), locked);
-  segPicker($('#set-shrink'), r.settings.shrink === false ? '0' : '1', (v) => send({ t: 'settings', shrink: v === '1' }), locked);
+  segPicker($('#set-revive'), r.settings.revive ? '1' : '0', (v) => send({ t: 'settings', revive: v === '1' }), locked);
+  // 复活赛不缩圈
+  segPicker($('#set-shrink'), r.settings.revive || r.settings.shrink === false ? '0' : '1', (v) => send({ t: 'settings', shrink: v === '1' }), locked || !!r.settings.revive);
   segPicker($('#set-time'), String(r.settings.time || 10), (v) => send({ t: 'settings', time: Number(v) }), locked);
 
   const addBot = $('#btn-add-bot');
@@ -936,6 +1073,7 @@ function renderRoom() {
   const othersReady = r.members.every((m) => m.isBot || m.id === r.hostId || m.ready);
   const canStart = waiting && r.members.length >= 2 && othersReady;
   start.className = 'btn btn-yellow btn-huge' + (canStart ? ' pulse' : '');
+  start.innerHTML = `${icon('play')}<span data-i18n="room.start">${t('room.start')}</span>`;
   start.classList.toggle('hidden', !isHost);
   start.disabled = !waiting;
   $('#room-hint').textContent = !waiting
@@ -1012,6 +1150,8 @@ async function startGame(info) {
   $('#killfeed').innerHTML = '';
   $('#pickup-pop').innerHTML = '';
   show('game');
+  // 开局等待其他玩家：显示连接状态，直到服务器开始倒计时
+  if (!rejoin || info.phase === 'wait') renderWaitStart(null);
   const sc = await ensureScene();
   sc.load({ ...info, players: info.players.map((p) => ({ ...p, name: displayName(p.name, p.isBot) })) }, state.user.id);
   if (info.k) sc.rebuildBlocks(info.k); // 当前地图方块（重连时尤其重要）
@@ -1026,6 +1166,20 @@ async function startGame(info) {
   buildHudPlayers();
   buildItemBar(info.items !== false);
   input.reset();
+  send({ t: 'loaded' }); // 场景加载完成：告诉服务器自己已就绪
+}
+
+/** 开局等待玩家连接：wait = 还没就绪的玩家 id 列表（null 表示还没收到服务器状态，全部显示连接中） */
+function renderWaitStart(wait, left) {
+  const box = $('#wait-start');
+  if (!state.game) return box.classList.add('hidden');
+  box.classList.remove('hidden');
+  const humans = state.game.players.filter((p) => !p.isBot);
+  $('#wait-list').innerHTML = humans.map((p) => {
+    const ok = wait ? !wait.includes(p.id) : false;
+    return `<div class="row${ok ? ' ok' : ''}"><span class="nm">${esc(displayName(p.name, false))}${p.id === state.user.id ? ` <small>(${esc(t('wait.you'))})</small>` : ''}</span><span class="st">${ok ? `${icon('check')}${esc(t('wait.ready'))}` : esc(t('wait.loading'))}</span></div>`;
+  }).join('');
+  $('#wait-left').textContent = left != null ? t('wait.left', { n: left }) : '';
 }
 
 /** 道具栏：左下角 6 格。点击或按数字键 1–6 使用 */
@@ -1131,6 +1285,8 @@ function onSnapshot(s) {
   net.snapTimes.push(now);
   while (net.snapTimes.length && now - net.snapTimes[0] > 1000) net.snapTimes.shift();
 
+  if (s.ph === 'wait') renderWaitStart(s.wt || [], s.wl);
+  else $('#wait-start').classList.add('hidden');
   if (s.ph === 'countdown' && s.cd !== state.lastCd) {
     state.lastCd = s.cd;
     countdownText(s.cd);
@@ -1150,6 +1306,8 @@ function onSnapshot(s) {
   $('#hud-net').innerHTML = `<span>${t('hud.input')} <b>${Math.round(net.inputLat)}</b>ms</span><span><b>${m.fps || 0}</b> FPS</span><span>${t('hud.sync')} <b>${net.snapTimes.length}</b> Hz</span>`;
   const mine = s.p.find((p) => p.id === state.user.id);
   $('#spectate').classList.toggle('hidden', !mine || !!mine.a || s.ph === 'end' || state.resultShown);
+  // 复活赛：被击倒后显示复活倒计时，而不是「观战中」
+  if (mine && !mine.a) $('#spectate span').textContent = mine.rs ? t('hud.respawn', { n: Math.ceil(mine.rs) }) : t('hud.spectate');
   for (const p of s.p) {
     const el = document.getElementById('hp-' + p.id);
     if (!el) continue;
@@ -1235,8 +1393,8 @@ function playEvents(s) {
   let booms = 0;
   for (const e of s.e) {
     switch (e.k) {
-      case 'place': audio.fx('place', { vol: 0.7 }); break;
-      case 'boom': if (booms++ < 2) audio.fx('boom'); break;
+      case 'place': audio.fx('place', { vol: 0.7, st: e.st }); break;
+      case 'boom': if (booms++ < 2) audio.fx('boom', { st: e.st }); break;
       case 'crate': audio.fx('crate', { vol: 0.6 }); break;
       case 'pick':
         audio.fx('pick', { vol: e.id === me ? 1 : 0.35 });
@@ -1285,7 +1443,7 @@ function playEvents(s) {
       case 'die':
         audio.fx('die');
         hurtFx(e.id);
-        feed(`${icon('skull')} ${t('ev.eliminated', { name: name(e.id) })}`);
+        feed(`${icon('skull')} ${t(e.rs ? 'ev.downed' : 'ev.eliminated', { name: name(e.id) })}`);
         if (e.id === me) {
           $('#spectate').classList.remove('hidden');
           const f = $('#hit-flash');
@@ -1293,6 +1451,7 @@ function playEvents(s) {
         }
         break;
       case 'tele': audio.fx('tele', { vol: 0.6 }); break;
+      case 'respawn': if (e.id === me) audio.fx('go', { vol: 0.6 }); break;
       case 'kick': audio.fx('kick'); break;
       case 'wall': audio.fx('wall', { vol: 0.5 }); break;
       case 'go': audio.fx('go'); break;
@@ -1355,7 +1514,8 @@ function showResult(result) {
     const lv0 = levelOf(prev), lv1 = me.level ?? levelOf(total);
     const tier = tierOf(lv1);
     const unlocked = (me.unlocked || []).map((h) => t('hat.' + h)).join(' / ');
-    rw.innerHTML = `<div class="rw-row"><span>${icon('star')}+${me.exp} EXP</span>${me.points ? `<span class="pts">${icon('gem')}+${me.points}</span>` : ''}</div>
+    rw.innerHTML = `<div class="rw-row"><span>${icon('star')}+${me.exp} EXP${me.expBoost ? `<small class="boost-tag">×${me.expBoost / 100}</small>` : ''}</span>${me.points ? `<span class="pts">${icon('gem')}+${me.points}${me.pointsPct ? `<small class="boost-tag">${me.pointsPct}%</small>` : ''}</span>` : ''}</div>
+      ${bonusLine(me)}
       <div class="rw-lv"><span class="rw-badge">${levelBadge(lv0)}</span><div class="expbar big" style="--tc:${tier.color}"><i style="width:${levelProgress(prev) * 100}%"></i><em></em></div></div>
       ${me.levelUp ? `<div class="rw-up" style="--tc:${tier.color}">${t('lv.up', { lv: lv1, tier: t('tier.' + tier.index) })}</div>` : ''}
       ${unlocked ? `<div class="rw-unlock">${icon('crown')} ${t('lv.unlocked', { hats: esc(unlocked) })}</div>` : ''}
@@ -1578,7 +1738,15 @@ $('#btn-ready').onclick = () => {
   const mine = state.room?.members.find((m) => m.id === state.user.id);
   send({ t: 'ready', v: !mine?.ready });
 };
-$('#btn-start').onclick = () => send({ t: 'start' });
+$('#btn-start').onclick = () => {
+  // 延迟大时，开始消息要过一会儿才回来：先让按钮显示「正在开始…」，避免看起来卡住不动
+  const b = $('#btn-start');
+  b.classList.add('busy');
+  b.innerHTML = `<span class="spinner inline"></span>${t('wait.starting')}`;
+  clearTimeout(state.startBusyT);
+  state.startBusyT = setTimeout(() => { if (state.screen === 'room' && state.room) renderRoom(); }, 8000); // 一直没回应：恢复按钮
+  send({ t: 'start' });
+};
 $('#btn-back-room').onclick = backToRoom;
 $('#btn-quit').onclick = async () => {
   if (state.resultShown) return backToRoom();
@@ -1595,13 +1763,10 @@ $('#btn-logout').onclick = async () => {
   const tip = state.user.provider === 'github' ? t('logout.github') : t('logout.guest', { id: state.user.id });
   const ok = await confirmDialog(tip, { title: t('logout.title'), yes: t('logout.yes'), no: t('common.cancel') });
   if (!ok) return;
-  state.conn?.close();
-  state.conn = null;
+  endSession();
   state.user = null;
   state.room = null;
-  $('#login-notice').classList.add('hidden');
-  $('#login-form').classList.remove('hidden');
-  $('#login-loading').classList.add('hidden');
+  resetLoginForm();
   if (state.loginCfg?.guest) $('#login-id').value = savedId();
   show('login');
 };

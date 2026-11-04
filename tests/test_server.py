@@ -119,6 +119,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({"t": "start"})
         start = await recv_until(ws, "start")
         self.assertFalse(start["rejoin"])
+        await ws.send_json({"t": "loaded"})  # 场景加载完成
         await recv_until(ws, "s", timeout=10, pred=lambda d: d["ph"] == "play")
         # 服务器端改变地图（模拟对局进行中方块被炸掉）
         g = self.client.server.app[LOBBY_KEY].rooms[start and next(iter(self.client.server.app[LOBBY_KEY].rooms))].game
@@ -260,9 +261,9 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await recv_until(ws, "pong"))["ts"], 3)
 
     # ---------- 房间 / 地图 / 机器人 ----------
-    async def test_eight_maps_plus_random(self):
+    async def test_fourteen_maps_plus_random(self):
         maps = (await (await self.client.get("/api/maps")).json())["maps"]
-        self.assertEqual(len(maps), 8)
+        self.assertEqual(len(maps), 14)
         a = await self.login("房主")
         ws = await self.connect(a)
         await ws.send_json({"t": "createRoom", "name": "地图房"})
@@ -339,6 +340,13 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         start = await recv_until(wa, "start")
         self.assertEqual(start["mapId"], "neon")
         self.assertEqual(len(start["players"]), 3)
+        # 开局先等待玩家连接：两名真人都回报加载完成后才开始倒计时
+        s = await recv_until(wa, "s", pred=lambda d: d["ph"] == "wait")
+        self.assertEqual(sorted(s["wt"]), sorted([a["user"]["id"], b["user"]["id"]]))
+        await wa.send_json({"t": "loaded"})
+        s = await recv_until(wa, "s", pred=lambda d: d["ph"] == "wait" and d["wt"] == [b["user"]["id"]])
+        await wb.send_json({"t": "loaded"})
+        await recv_until(wa, "s", pred=lambda d: d["ph"] == "countdown")
 
         s = await recv_until(wa, "s", timeout=10, pred=lambda d: d["ph"] == "play")
         me0 = next(p for p in s["p"] if p["id"] == a["user"]["id"])
@@ -383,8 +391,11 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((row["exp"], row["points"]), (winner["exp"], winner["points"]))
         self.assertGreaterEqual(row["exp"], 100)
         self.assertGreaterEqual(row["points"], 10)
-        # 失败方有少量经验，但没有点数
-        self.assertEqual((loser["games"], loser["wins"], loser["points"]), (1, 0, 0))
+        # 失败方有少量经验，点数为胜利算式的 15%–35%
+        self.assertEqual((loser["games"], loser["wins"]), (1, 0))
+        lp = next(x for x in end["result"]["players"] if x["id"] == b["user"]["id"])
+        self.assertTrue(15 <= lp["lossPct"] <= 35)
+        self.assertEqual(loser["points"], lp["points"])
         self.assertGreater(loser["exp"], 0)
         self.assertEqual(me["user"]["points"], row["points"])
         self.assertEqual(me["user"]["exp"], row["exp"])
@@ -411,7 +422,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         await wb.send_json({"t": "history"})
         hb = (await recv_until(wb, "history"))["list"][0]
         self.assertFalse(hb["win"])
-        self.assertEqual(hb["points"], 0)
+        self.assertEqual(hb["points"], lp["points"])  # 失败也有 15%–35% 的点数
         await wa.send_json({"t": "leaderboard"})
         lb = (await recv_until(wa, "leaderboard"))["list"]
         self.assertEqual(lb[0]["id"], a["user"]["id"])

@@ -34,7 +34,7 @@ class FakeGitHub(GitHubOAuth):
 class AuthTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         con = await asyncpg.connect(TEST_DSN)
-        await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
+        await con.execute("DROP TABLE IF EXISTS boost_purchases, bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
         await con.close()
         self.clients = []
 
@@ -131,7 +131,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_config_endpoint(self):
         c, _ = await self.make(guest=False, github=True)
-        self.assertEqual(await (await c.get("/login-info")).json(), {"guest": False, "github": True})
+        self.assertEqual(await (await c.get("/login-info")).json(), {"guest": False, "github": True, "version": "1.0-beta"})
 
     async def test_guest_disabled_blocks_guest_and_id_login(self):
         c, _ = await self.make(guest=False, github=True)
@@ -274,12 +274,13 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
     def test_rewards(self):
         from backend.store import reward_for
         win, _ = reward_for(True, 0, 0, 1)
-        self.assertEqual(reward_for(True, 2, 1, 1), (100 + 20 + 10, 10 + 4 + 2))
+        self.assertEqual(reward_for(True, 2, 1, 1), (100 + 20 + 10, 10 + 8 + 2))
         for kills, rescues in [(0, 0), (3, 2), (8, 4)]:
             lose, points = reward_for(False, kills, rescues, 2)
-            full, _ = reward_for(True, kills, rescues, 1)
+            full, full_pts = reward_for(True, kills, rescues, 1)
             self.assertLess(lose, full * 0.2, "失败经验应少于胜利的 20%")
-            self.assertEqual(points, 0)
+            self.assertGreaterEqual(points, round(full_pts * 0.15))
+            self.assertLessEqual(points, round(full_pts * 0.35))
 
     def test_level_curve(self):
         from backend.store import default_level_table, level_of
@@ -309,16 +310,39 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await con.close()
 
-    def test_points_only_on_win(self):
-        from backend.store import points_for
+    def test_points_formula(self):
+        from backend.store import points_for, streak_bonus
         self.assertEqual(points_for(True, 0, 0), 10)
-        self.assertEqual(points_for(True, 3, 1), 18)
-        self.assertEqual(points_for(False, 5, 3), 0)
+        self.assertEqual(points_for(True, 3, 1), 10 + 12 + 2)
+        self.assertEqual(points_for(False, 5, 3, loss_pct=20), round((10 + 20 + 6) * 0.2))
+        # 连杀：每人 +5%，最多 +30%，只有获胜才有
+        self.assertEqual([streak_bonus(True, n) for n in (0, 1, 2, 3, 6, 9)], [0, 5, 10, 15, 30, 30])
+        self.assertEqual(streak_bonus(False, 4), 0)
+
+    async def test_bonus_adds_up_with_card(self):
+        """连杀 +30% 与双倍点数卡 +100% 直接相加 = 230%，不是相乘的 260%。"""
+        import time as _t
+        from backend import store
+        c, _ = await self.make(guest=True, github=False)
+        uid, ws, _w = await self._shop_user(c, 0, 0)
+        store._users[uid]["pointsBoost"], store._users[uid]["pointsBoostUntil"] = 200, int(_t.time() * 1000) + 60_000
+        result = {"mode": "ffa", "revive": True, "mapId": "meadow", "draw": False, "winnerTeam": 0, "duration": 60, "players": [
+            {"id": uid, "isBot": False, "team": 0, "kills": 6, "rescues": 0, "alive": True, "place": 1, "win": True, "quit": False,
+             "streak": 6, "rankBonus": 25},
+        ]}
+        store.record_match(result)
+        await asyncio.gather(*store._bg)
+        p = result["players"][0]
+        base = store.points_for(True, 6, 0)
+        self.assertEqual(p["bonus"], {"streak": 30, "rank": 25, "card": 100})
+        self.assertEqual(p["pointsPct"], 255)
+        self.assertEqual(p["points"], base * 255 // 100)
+        await ws.close()
 
     async def test_coins_merged_into_points(self):
         """旧库里的金币按 5:1 并入点数，金币列被删除，排行榜索引按新定义重建。"""
         con = await asyncpg.connect(TEST_DSN)
-        await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
+        await con.execute("DROP TABLE IF EXISTS boost_purchases, bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users CASCADE")
         await con.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, skin SMALLINT NOT NULL DEFAULT 0, hat SMALLINT NOT NULL DEFAULT 0, "
                           "exp INTEGER NOT NULL DEFAULT 0, coins INTEGER NOT NULL DEFAULT 0, games INTEGER NOT NULL DEFAULT 0, "
                           "wins INTEGER NOT NULL DEFAULT 0, kills INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
@@ -432,7 +456,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         import time as _t
         c, _ = await self.make(guest=True, github=False)
         uid, ws, welcome = await self._shop_user(c, 0, 450)
-        self.assertEqual(welcome["bombShop"], {"styles": ["poison", "water", "gold"], "price": 200, "days": 7})
+        self.assertEqual(welcome["bombShop"], {"styles": [{"id": st, "price": 200, "days": 7} for st in ("poison", "water", "gold")]})
         self.assertEqual(welcome["user"]["bomb"], {"style": "", "until": 0})
         # 买毒弹：扣 200 点，立即生效 7 天
         await ws.send_json({"t": "buy", "item": "poison"})
@@ -458,6 +482,99 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         from backend import store
         store._users[uid]["bombUntil"] = int(_t.time() * 1000) - 1
         self.assertEqual(store.public_user(store._users[uid])["bomb"], {"style": "", "until": 0})
+        await ws.close()
+
+    async def test_boost_cards(self):
+        import time as _t
+        from backend import store
+        c, _ = await self.make(guest=True, github=False)
+        uid, ws, welcome = await self._shop_user(c, 0, 1180)
+        self.assertEqual([(x["id"], x["price"], x["hours"]) for x in welcome["boostShop"]["cards"]],
+                         [("exp150", 160, 24), ("exp200", 220, 24), ("exp300", 300, 24), ("pts150", 200, 24), ("pts200", 280, 24), ("pts300", 360, 24)])
+        self.assertEqual(welcome["user"]["boosts"], {})
+        day = 24 * 3600 * 1000
+        # 双倍经验卡：220 点，24 小时
+        await ws.send_json({"t": "buy", "item": "exp200"})
+        me = (await self._reply(ws, "me"))["user"]
+        self.assertEqual((me["points"], me["boosts"]["exp"]["pct"]), (960, 200))
+        until1 = me["boosts"]["exp"]["until"]
+        self.assertLess(abs(until1 - (_t.time() * 1000 + day)), 60_000)
+        # 同一倍率再买：顺延 24 小时
+        await ws.send_json({"t": "buy", "item": "exp200"})
+        me = (await self._reply(ws, "me"))["user"]
+        self.assertLess(abs(me["boosts"]["exp"]["until"] - (until1 + day)), 5_000)
+        # 不同倍率：立即替换，从现在起 24 小时
+        await ws.send_json({"t": "buy", "item": "exp150"})
+        me = (await self._reply(ws, "me"))["user"]
+        self.assertEqual((me["points"], me["boosts"]["exp"]["pct"]), (580, 150))
+        self.assertLess(abs(me["boosts"]["exp"]["until"] - (_t.time() * 1000 + day)), 60_000)
+        # 3 倍点数卡（360）：和经验卡互不影响
+        await ws.send_json({"t": "buy", "item": "pts300"})
+        me = (await self._reply(ws, "me"))["user"]
+        self.assertEqual((me["points"], me["boosts"]["points"]["pct"], me["boosts"]["exp"]["pct"]), (220, 300, 150))
+        await ws.send_json({"t": "buy", "item": "pts200"})
+        self.assertEqual((await self._reply(ws, "error"))["code"], "item_points")
+        # 结算：经验 ×1.5，点数 ×3
+        result = {"mode": "ffa", "mapId": "meadow", "draw": False, "winnerTeam": None, "duration": 60, "players": [
+            {"id": uid, "isBot": False, "team": 0, "kills": 2, "rescues": 0, "alive": True, "place": 1, "win": True, "quit": False},
+        ]}
+        store.record_match(result)
+        await asyncio.gather(*store._bg)
+        p = result["players"][0]
+        exp0, pts0 = store.reward_for(True, 2, 0)
+        self.assertEqual((p["exp"], p["points"], p["expBoost"], p["pointsPct"]), (exp0 * 3 // 2, pts0 * 3, 150, 300))
+        self.assertEqual(p["bonus"], {"card": 200})
+        con = await asyncpg.connect(TEST_DSN)
+        try:
+            self.assertEqual(await con.fetchval("SELECT points FROM users WHERE id = $1", uid), 220 + pts0 * 3)
+            self.assertEqual(await con.fetchval("SELECT count(*) FROM boost_purchases WHERE user_id = $1", uid), 4)
+        finally:
+            await con.close()
+        # 到期：加成消失
+        store._users[uid]["expBoostUntil"] = int(_t.time() * 1000) - 1
+        self.assertNotIn("exp", store.public_user(store._users[uid])["boosts"])
+        self.assertEqual(store.active_boost(store._users[uid], "exp"), 100)
+        await ws.close()
+
+    def test_store_items_availability(self):
+        """store_item.json：price = -1、缺少该 ID、内容与 ID 对不上 → 物品不可用；其他物品不受影响。"""
+        import json as _json
+        import tempfile
+        from pathlib import Path as _P
+        from backend import store
+        good = _json.loads(store.STORE_ITEMS_FILE.read_text(encoding="utf-8"))
+        cfg = dict(good)
+        cfg["exp150"] = {**good["exp150"], "pct": 200}  # 名字对不上
+        cfg["pts300"] = {**good["pts300"], "price": -1}  # 价格 -1
+        cfg["rename"] = {"price": "100"}  # 格式不对
+        del cfg["water"]  # 缺少
+        cfg["mystery"] = {"price": 1}  # 未知商品：忽略
+        with tempfile.TemporaryDirectory() as d:
+            f = _P(d) / "store_item.json"
+            f.write_text(_json.dumps(cfg), encoding="utf-8")
+            items = store.load_store_items(f)
+            self.assertEqual({k: v["price"] for k, v in items.items()}, {
+                "rename": None, "poison": 200, "water": None, "gold": 200,
+                "exp150": None, "exp200": 220, "exp300": 300, "pts150": 200, "pts200": 280, "pts300": None})
+            f.write_text("{ not json", encoding="utf-8")
+            self.assertTrue(all(v["price"] is None for v in store.load_store_items(f).values()))
+
+    async def test_unavailable_item_cannot_be_bought(self):
+        from backend import store
+        c, _ = await self.make(guest=True, github=False)
+        uid, ws, welcome = await self._shop_user(c, 0, 1000)
+        old = dict(store.STORE_ITEMS["exp200"])
+        store.STORE_ITEMS["exp200"]["price"] = None
+        try:
+            await ws.send_json({"t": "buy", "item": "exp200"})
+            self.assertEqual((await self._reply(ws, "error"))["code"], "item_unavailable")
+        finally:
+            store.STORE_ITEMS["exp200"] = old
+        con = await asyncpg.connect(TEST_DSN)
+        try:
+            self.assertEqual(await con.fetchval("SELECT points FROM users WHERE id = $1", uid), 1000)
+        finally:
+            await con.close()
         await ws.close()
 
     async def test_shop_purchase_rules(self):
@@ -562,7 +679,7 @@ class NoNullTests(unittest.IsolatedAsyncioTestCase):
         from backend import store
         con = await asyncpg.connect(TEST_DSN)
         try:
-            await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users, name_changes CASCADE")
+            await con.execute("DROP TABLE IF EXISTS boost_purchases, bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users, name_changes CASCADE")
         finally:
             await con.close()
         await store.init(TEST_DSN)
@@ -584,7 +701,7 @@ class NoNullTests(unittest.IsolatedAsyncioTestCase):
         from backend import store
         con = await asyncpg.connect(TEST_DSN)
         try:
-            await con.execute("DROP TABLE IF EXISTS bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users, name_changes CASCADE")
+            await con.execute("DROP TABLE IF EXISTS boost_purchases, bomb_purchases, user_items, cosmetics, match_players, login_tokens, matches, levels, meta, users, name_changes CASCADE")
             await con.execute("""
                 CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, skin SMALLINT NOT NULL DEFAULT 0,
                     hat SMALLINT NOT NULL DEFAULT 0, games INTEGER NOT NULL DEFAULT 0, wins INTEGER NOT NULL DEFAULT 0,

@@ -3,7 +3,7 @@ import random
 import unittest
 
 from backend import bot
-from backend.game import (BASE_SPEED, FLAME_TIME, MAX_SPEED_LV, SPEED_STEP, TICK_RATE, Bomb, Flame, Game,
+from backend.game import (BASE_SPEED, FLAME_TIME, BOOTS_SPEED_LV, SPEED_STEP, TICK_RATE, Bomb, Flame, Game,
                           pick_powerup)
 
 
@@ -95,7 +95,7 @@ class InventoryTests(unittest.TestCase):
         a.items[0] = "boots"
         base = g.player_speed(a)
         self.assertTrue(g.use_item("a", 0))
-        self.assertAlmostEqual(g.player_speed(a), BASE_SPEED * (1 + SPEED_STEP * MAX_SPEED_LV))
+        self.assertAlmostEqual(g.player_speed(a), BASE_SPEED * (1 + SPEED_STEP * BOOTS_SPEED_LV))
         self.assertGreater(g.player_speed(a), base)
         step(g, int(5.2 * TICK_RATE))
         self.assertAlmostEqual(g.player_speed(a), base)

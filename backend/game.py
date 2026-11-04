@@ -9,8 +9,8 @@
       - 敌人碰到：直接击破（淘汰，计为击倒）
       - 10 秒内无人救援：淘汰
   * 护盾可抵挡一次击中
-  * 跑鞋 +5% 速度（最多 +25%），减速道具 -5%（最多 -25%）
-  * 炸弹道具：可同时放置数 +1（起始 1，最多 5）
+  * 跑鞋 +5% 速度（最多 +35%），超级跑鞋 5 秒内 +50%，减速道具 -5%（最多 -25%）
+  * 炸弹道具：可同时放置数 +1（起始 1，最多 8）
   * 钢制货箱需两次爆炸；爆炸油桶被引爆后会二次爆炸
 """
 from __future__ import annotations
@@ -33,10 +33,14 @@ DT = 1 / TICK_RATE
 ROUND_TIME = 600.0  # 一局 10 分钟
 SD_TIME = 60.0  # 最后 60 秒开始缩圈
 COUNTDOWN = 3.0
+WAIT_MAX = 15.0  # 开局前等待玩家加载完成（连接就绪）的最长时间，超时后不再等
 FUSE = 2.5
 FLAME_TIME = 0.55
 INVULN_RESCUE = 3.0  # 被救活后无敌 3 秒
 INVULN_START = 3.0  # 开局无敌 3 秒
+RESPAWN_TIME = 3.0  # 复活赛：被淘汰后多久自动复活
+INVULN_RESPAWN = 3.0  # 复活后无敌 3 秒
+RANK_BONUS = (25, 15, 5)  # 复活赛：按得分前三名的点数加成（%）
 BODY_HALF = 0.3  # 角色碰撞半宽（格）
 HIT_OVERLAP = 0.46  # 身体覆盖某格的比例 ≥ 46% 才会被该格火焰命中
 TOUCH_DIST = 0.6  # 两名角色中心距离小于此值视为接触（救援 / 击破）
@@ -44,11 +48,12 @@ TRAP_TIME = 10.0
 TRAP_SPEED = 0.3  # 被困时的移动速度倍率
 BASE_SPEED = 3.8
 SPEED_STEP = 0.05  # 每级 ±5%
-MAX_SPEED_LV = 5  # +25%
+MAX_SPEED_LV = 7  # +35%
+BOOTS_SPEED_LV = 10  # 超级跑鞋：+50%
 MIN_SPEED_LV = -5  # -25%
-MAX_BOMBS = 5
+MAX_BOMBS = 8
 START_RANGE = 1  # 初始威力：中心向四个方向各 1 格（3x3 十字）
-MAX_RANGE = 5  # 最大威力：每个方向 5 格（11x11 十字）
+MAX_RANGE = 6  # 最大威力：每个方向 6 格（13x13 十字）
 BARREL_RANGE = 2
 KICK_SPEED = 9.0
 ICE_MULT = 1.35
@@ -73,11 +78,11 @@ OPP = {"up": "down", "down": "up", "left": "right", "right": "left"}
 BIT = {"up": 1, "right": 2, "down": 4, "left": 8}
 CENTER_BIT = 16
 CONVEYOR = {"^": "up", "v": "down", "<": "left", ">": "right"}
-# 道具：bomb 连放+1 / fire 威力+1 / speed 跑鞋+5% / slow 减速-5% / shield 护盾 / kick 踢弹 / max 威力满级
+# 道具：bomb 连放+1 / fire 威力+1 / speed 跑鞋+5% / slow 减速-5% / shield 护盾 / kick 踢弹 / max 威力 +50%
 POWERUP_TABLE = [("bomb", 26), ("fire", 28), ("speed", 16), ("slow", 10), ("shield", 8), ("kick", 6), ("max", 2),
                  # 道具（放进道具栏，按 1–6 使用）
                  ("needle", 5), ("ishield", 4), ("boots", 4), ("ghost", 3), ("wings", 3)]
-# 道具：针（被困时使用，立即脱困）/ 无敌盾牌（3 秒内不会被炸到）/ 超级跑鞋（5 秒速度 +25%）
+# 道具：针（被困时使用，立即脱困）/ 无敌盾牌（3 秒内不会被炸到）/ 超级跑鞋（5 秒速度 +50%）
 #       透明人（隐身 10 秒）/ 腾飞之翼（5 秒内可以穿过炸弹，被火焰炸到照样判定）
 ITEM_KINDS = ("needle", "ishield", "boots", "ghost", "wings")
 ITEM_SLOTS = 6
@@ -85,8 +90,23 @@ ISHIELD_TIME = 3.0
 BOOTS_TIME = 5.0
 GHOST_TIME = 10.0
 WINGS_TIME = 5.0
-BLOCKING = ("#", "x", "m", "e", "Y", "H", "~")
-HARD = ("#", "Y", "H")  # 挡住火焰且不可破坏
+BLOCKING = ("#", "x", "m", "e", "g", "w", "Y", "H", "~")
+HARD = ("#", "Y", "H", "w")  # 挡住火焰且不可破坏（w = 升起的冰墙闸门）
+SOFT = ("x", "m", "e", "g")  # 挡住火焰、可被炸毁
+
+# ---- 地图机关 ----
+REGROW_TIME = 15.0  # 樱花庭院：草丛被烧掉后多久重新长出来
+GATE_PERIOD = 7.0  # 极光冰川：两组冰墙闸门每隔多久轮换一次
+GATE_WARN = 1.5  # 闸门升起前的预警时间
+SUPPLY_PERIOD = 12.0  # 星际空港：补给台每隔多久空投一次道具
+VENT_PERIOD = 9.0  # 烈日斗兽场：火焰喷口喷火间隔
+VENT_RANGE = 2
+METEOR_PERIOD = 6.5  # 火山孤岛：陨石间隔
+METEOR_COUNT = 3
+METEOR_RANGE = 1
+HAZARD_WARN = 1.6  # 喷火 / 陨石落地前的预警时间
+MECH_DELAY = 6.0  # 开局多久后机关才开始运作
+CHEST_TABLE = [("bomb", 30), ("fire", 30), ("speed", 16), ("kick", 9), ("shield", 10), ("max", 5)]
 WALKABLE_FOR_BOMB = (".", "b")
 
 
@@ -169,6 +189,9 @@ class Player:
     boots_t: float = -1.0  # 超级跑鞋
     ghost_t: float = -1.0  # 透明人
     wings_t: float = -1.0  # 腾飞之翼
+    streak: int = 0  # 当前连杀（被泡泡包住就清零；不在游戏中显示，结算时折算点数加成）
+    deaths: int = 0
+    respawn_t: float = 0.0  # 复活赛：距离复活还剩几秒（> 0 表示正在等待复活）
 
 
 @dataclass
@@ -211,6 +234,7 @@ class Game:
         shrink: bool = True,  # 最后 60 秒是否缩圈（房间可选）
         items: bool = True,  # 是否掉落道具（房间可选）
         net_rate: int = NET_RATE,  # 状态广播频率（同步 Hz）
+        revive: bool = False,  # 复活赛：被淘汰 3 秒后复活，时间到按击倒 / 得分排名
     ) -> None:
         players = players or []
         self.rng = rng or random.Random()
@@ -220,7 +244,8 @@ class Game:
         self.on_end = on_end or (lambda result: None)
         self.on_anomaly = on_anomaly or (lambda pid, kind: None)
         self.round_time = round_time
-        self.shrink = bool(shrink)
+        self.revive = bool(revive)
+        self.shrink = bool(shrink) and not self.revive  # 复活赛不缩圈（出生点在四角，会被墙封住）
         self.items_on = bool(items)
         self.net_rate = max(NET_RATE_MIN, min(NET_RATE_MAX, int(net_rate)))
         self._last_key = 0  # 上次下发完整地图（关键帧）的帧号
@@ -234,7 +259,20 @@ class Game:
         self.blocks = m.blocks
         self.tele = m.tele
         self.has_ice = "i" in self.floor
+        # 地图机关
+        self.mech = m.mech
+        self.gates = [i for i, f in enumerate(self.floor) if f in ("w", "u")]
+        self.gate_rise: set[int] = set()  # 等待升起（格子里有人 / 炸弹时先不升）
+        self.gate_t = MECH_DELAY + GATE_PERIOD
+        self.gate_warned = False
+        self.gate_flip = False  # False：下次升起 'u' 组（开局落下的那组）；True：下次升起 'w' 组
+        self.pads = [i for i, f in enumerate(self.floor) if f == "s"]
+        self.vents = [i for i, f in enumerate(self.floor) if f == "f"]
+        self.regrow: dict[int, float] = {}
+        self.hazards: list[list] = []  # [剩余秒数, x, y, 威力]：已预警、即将爆炸的机关火焰
+        self.mech_t = MECH_DELAY
 
+        self.spawn_points = list(m.spawns)
         spawns = self._assign_spawns(m.spawns, players)
         self.players: list[Player] = []
         for i, pl in enumerate(players):
@@ -268,7 +306,10 @@ class Game:
         self.events: list[dict] = []
         self.reveal: list[int] = []
 
-        self.phase = "countdown"
+        # 开局先「等待玩家连接」：所有真人加载完场景并回报后才开始倒计时（延迟大 / 加载慢时不会错过开场）
+        self.phase = "wait"
+        self.waiting: set[str] = {p.id for p in self.players if not p.is_bot}
+        self.wait_left = WAIT_MAX
         self.countdown = COUNTDOWN
         self.time_left = round_time
         self.elapsed = 0.0
@@ -319,8 +360,8 @@ class Game:
 
     @staticmethod
     def speed_level(p: Player) -> int:
-        """生效的速度等级：超级跑鞋期间直接拉满（+25%）。"""
-        return MAX_SPEED_LV if p.boots_t > 0 else p.speed_lv
+        """生效的速度等级：超级跑鞋期间直接提到 +50%。"""
+        return BOOTS_SPEED_LV if p.boots_t > 0 else p.speed_lv
 
     def player_speed(self, p: Player) -> float:
         s = BASE_SPEED * (1 + SPEED_STEP * self.speed_level(p)) * (1 + p.speed_bonus)
@@ -427,6 +468,7 @@ class Game:
 
     def forfeit(self, pid: str) -> None:
         """主动退出：判负出局（已阵亡后再退出也一样），本局不获得任何奖励。"""
+        self.waiting.discard(pid)
         p = self.player(pid)
         if p is None or self.phase == "end":
             return
@@ -434,10 +476,19 @@ class Game:
         if p.alive:
             self.die(p, None)
 
+    def player_loaded(self, pid: str) -> None:
+        """玩家的场景加载完成（或断线 / 退出，不再等他）。"""
+        self.waiting.discard(pid)
+
     def tick(self) -> bool:
         """推进一帧；返回 True 表示本局已结束。"""
         self.tick_no += 1
-        if self.phase == "countdown":
+        if self.phase == "wait":
+            self.wait_left -= DT
+            if not self.waiting or self.wait_left <= 0:
+                self.waiting.clear()
+                self.phase = "countdown"
+        elif self.phase == "countdown":
             self.countdown -= DT
             if self.countdown <= 0:
                 self.phase = "play"
@@ -464,6 +515,13 @@ class Game:
     def update(self, dt: float) -> None:
         self.elapsed += dt
         self.time_left -= dt
+
+        if self.revive:
+            for p in self.players:
+                if not p.alive and p.respawn_t > 0:
+                    p.respawn_t -= dt
+                    if p.respawn_t <= 0:
+                        self._respawn(p)
 
         for p in self.players:
             if p.alive and p.is_bot:
@@ -504,6 +562,8 @@ class Game:
                 break
             for b in ready:
                 self.explode(b)
+
+        self._update_mechanics(dt)
 
         for i in self.reveal:
             if self.rng.random() < DROP_CHANCE:
@@ -577,7 +637,7 @@ class Game:
                     o.rescues += 1
                     self.events.append({"k": "rescue", "id": p.id, "by": o.id, "x": p.x, "y": p.y})
                 else:
-                    o.kills += 1
+                    self._credit_kill(o)
                     self.events.append({"k": "pop", "id": p.id, "by": o.id, "x": p.x, "y": p.y})
                     self.die(p, o, counted=True)
                 break
@@ -587,8 +647,13 @@ class Game:
                     p.trapped = 0
                     killer = self.player(p.trap_by)
                     if killer and killer is not p and (self.mode != "team" or killer.team != p.team):
-                        killer.kills += 1
+                        self._credit_kill(killer)
                     self.die(p, killer, counted=True)
+
+    @staticmethod
+    def _credit_kill(o: Player) -> None:
+        o.kills += 1
+        o.streak += 1
 
     def _flame_on_body(self, p: Player) -> Flame | None:
         """返回覆盖角色身体（覆盖比例 ≥ HIT_OVERLAP）的火焰。"""
@@ -610,7 +675,7 @@ class Game:
     # ---------- 客户端移动校验 ----------
     def max_speed(self, p: Player) -> float:
         # 超级跑鞋刚结束时客户端可能还在用加速后的速度（网络延迟），额度按最高等级计算
-        lv = MAX_SPEED_LV if p.boots_t > -0.5 else p.speed_lv
+        lv = BOOTS_SPEED_LV if p.boots_t > -0.5 else p.speed_lv
         s = BASE_SPEED * (1 + SPEED_STEP * lv) * (1 + p.speed_bonus)
         if self.has_ice:
             s *= ICE_MULT
@@ -814,7 +879,7 @@ class Game:
             return
         self.bombs.append(Bomb(self.next_bomb_id, p.id, p.skin, x, y, float(x), float(y), FUSE, p.range, style=p.bomb_style))
         self.next_bomb_id += 1
-        self.events.append({"k": "place", "id": p.id, "x": x, "y": y})
+        self.events.append({"k": "place", "id": p.id, "x": x, "y": y, "st": p.bomb_style})
 
     def _bomb_can_enter(self, b: Bomb, x: int, y: int) -> bool:
         if not self.in_bounds(x, y) or self.blocks[y * self.W + x] not in WALKABLE_FOR_BOMB:
@@ -862,7 +927,7 @@ class Game:
                 if blk in HARD:
                     break
                 out.append(i)
-                if blk in ("x", "m", "e"):
+                if blk in SOFT:
                     break
         return out
 
@@ -896,6 +961,11 @@ class Game:
                     self.blocks[i] = "x"  # 钢箱被打裂，变成普通木箱
                     self.events.append({"k": "steel", "x": x, "y": y})
                     stop = True
+                elif blk == "g":
+                    self.blocks[i] = "."
+                    self.powerups[i] = _weighted(self.rng, CHEST_TABLE)  # 宝箱必出道具
+                    self.events.append({"k": "chest", "x": x, "y": y})
+                    stop = True
                 elif blk == "e":
                     self.blocks[i] = "."
                     self.events.append({"k": "barrel", "x": x, "y": y})
@@ -908,6 +978,8 @@ class Game:
                     if blk == "b":
                         self.blocks[i] = "."
                         self.events.append({"k": "bush", "x": x, "y": y})
+                        if self.mech == "regrow":
+                            self.regrow[i] = REGROW_TIME
                     for other in self.bombs:
                         if rnd(other.px) == x and rnd(other.py) == y:
                             other.fuse = min(other.fuse, 0.08)
@@ -947,6 +1019,7 @@ class Game:
             return
         p.trapped = TRAP_TIME
         p.trap_by = owner_id
+        p.streak = 0  # 被泡泡包住：连杀清零
         p.in_bomb = False
         self.events.append({"k": "trap", "id": p.id, "by": owner_id, "x": p.x, "y": p.y})
 
@@ -958,17 +1031,19 @@ class Game:
         p.death_at = self.elapsed
         p.moving = False
         p.in_dir = None
+        p.deaths += 1
+        p.streak = 0
+        respawn = self.revive and self.phase == "play" and not p.quit
         self.events.append(
-            {"k": "die", "id": p.id, "x": p.x, "y": p.y, "by": killer.id if killer and killer is not p else None}
+            {"k": "die", "id": p.id, "x": p.x, "y": p.y, "by": killer.id if killer and killer is not p else None,
+             **({"rs": RESPAWN_TIME} if respawn else {})}
         )
-        # 掉落部分道具
         items = (
             ["bomb"] * (p.max_bombs - 1)
             + ["fire"] * max(0, p.range - START_RANGE)
             + ["speed"] * max(0, p.speed_lv)
             + (["kick"] if p.kick else [])
         )
-        self.rng.shuffle(items)
         free = [
             i
             for i, blk in enumerate(self.blocks)
@@ -978,10 +1053,23 @@ class Game:
             and i not in self.tele
             and not self.bomb_at(i % self.W, i // self.W)
         ]
-        for it in items[:4]:
+        # 掉落：复活赛掉出身上全部能力道具，普通模式最多 4 个；道具栏里没用掉的道具都会掉出来。
+        # 位置由服务器在全图空地中随机挑选。
+        self.rng.shuffle(items)
+        drops = (items if respawn else items[:4]) + [it for it in p.items if it]
+        p.items = [""] * ITEM_SLOTS
+        for it in drops:
             if not free:
                 break
-            self.powerups[free.pop(self.rng.randrange(len(free)))] = it
+            i = free.pop(self.rng.randrange(len(free)))
+            self.powerups[i] = it
+            if it in ITEM_KINDS:
+                self._claim_item(i)
+        if respawn:
+            # 能力回到初始值，3 秒后复活
+            p.max_bombs, p.range, p.speed_lv, p.kick, p.shield = 1, START_RANGE, 0, False, False
+            p.ishield_t = p.boots_t = p.ghost_t = p.wings_t = -1.0
+            p.respawn_t = RESPAWN_TIME
 
     def _claim_item(self, i: int) -> None:
         """道具掉出来时，离它最近的 AI 掷骰子：中等 50% 决定去捡（难总会去捡，简单从不捡）。"""
@@ -1026,8 +1114,8 @@ class Game:
             p.max_bombs = min(MAX_BOMBS, p.max_bombs + 1)
         elif kind == "fire":
             p.range = min(MAX_RANGE, p.range + 1)
-        elif kind == "max":
-            p.range = MAX_RANGE
+        elif kind == "max":  # 威力 +50%（向上取整）：3×3 → 5×5 → 7×7 → 11×11 → 13×13
+            p.range = min(MAX_RANGE, math.ceil(p.range * 1.5))
         elif kind == "speed":
             p.speed_lv = min(MAX_SPEED_LV, p.speed_lv + 1)
         elif kind == "slow":
@@ -1037,6 +1125,149 @@ class Game:
         elif kind == "shield":
             p.shield = True
         self.events.append({"k": "pick", "id": p.id, "type": kind, "x": p.x, "y": p.y})
+
+    # ---------- 地图机关 ----------
+    def _body_on(self, i: int) -> bool:
+        x, y = i % self.W, i // self.W
+        return any(p.alive and (x, y) in self._cells(p.x, p.y) for p in self.players)
+
+    def _shrunk(self, i: int) -> bool:
+        return self.sd_started and self.sd_rank.get(i, 1 << 30) < self.sd_index
+
+    def _hazard(self, x: int, y: int, rng_: int) -> None:
+        """预警一次机关爆炸：先在地上标出范围，HAZARD_WARN 秒后爆炸（不属于任何玩家）。"""
+        self.hazards.append([HAZARD_WARN, x, y, rng_])
+        self.events.append({"k": "warn", "c": self.blast_tiles(x, y, rng_), "t": HAZARD_WARN})
+
+    def _update_mechanics(self, dt: float) -> None:
+        # 已预警的机关爆炸
+        for h in self.hazards:
+            h[0] -= dt
+        for h in [h for h in self.hazards if h[0] <= 0]:
+            self.hazards.remove(h)
+            _, x, y, r = h
+            if self.blocks[y * self.W + x] == "#":
+                continue  # 已被缩圈的墙覆盖
+            b = Bomb(self.next_bomb_id, "", 0, x, y, float(x), float(y), 0.0, r, barrel=True)
+            self.next_bomb_id += 1
+            self.bombs.append(b)
+            self.explode(b)
+
+        # 樱花庭院：烧掉的草丛重新长出来
+        for i in list(self.regrow):
+            self.regrow[i] -= dt
+            if self.regrow[i] > 0:
+                continue
+            x, y = i % self.W, i // self.W
+            if self.blocks[i] != ".":
+                del self.regrow[i]
+            elif i in self.flames or i in self.powerups or self.bomb_at(x, y):
+                self.regrow[i] = 1.0  # 有东西挡着：稍后再试
+            else:
+                del self.regrow[i]
+                self.blocks[i] = "b"
+                self.events.append({"k": "grow", "x": x, "y": y})
+
+        # 极光冰川：两组冰墙闸门轮流升降
+        if self.gates:
+            self.gate_t -= dt
+            up_next = [i for i in self.gates if (self.floor[i] == "u") != self.gate_flip]
+            if self.gate_t <= GATE_WARN and not self.gate_warned:
+                self.gate_warned = True
+                self.events.append({"k": "warn", "c": [i for i in up_next if self.blocks[i] == "."], "t": GATE_WARN, "g": 1})
+            if self.gate_t <= 0:
+                self.gate_t += GATE_PERIOD
+                self.gate_warned = False
+                self.gate_flip = not self.gate_flip
+                for i in self.gates:
+                    if i in up_next:
+                        self.gate_rise.add(i)
+                    elif self.blocks[i] == "w":
+                        self.blocks[i] = "#" if self._shrunk(i) else "."
+                        self.gate_rise.discard(i)
+                        self.events.append({"k": "gate", "x": i % self.W, "y": i // self.W, "up": 0})
+            for i in list(self.gate_rise):
+                x, y = i % self.W, i // self.W
+                if self.blocks[i] != ".":
+                    self.gate_rise.discard(i)
+                elif not self._body_on(i) and not self.bomb_at(x, y) and i not in self.flames:
+                    self.gate_rise.discard(i)
+                    self.blocks[i] = "w"
+                    if self.powerups.pop(i, None):
+                        self.events.append({"k": "burn", "x": x, "y": y})
+                    self.events.append({"k": "gate", "x": x, "y": y, "up": 1})
+
+        if not (self.pads or self.vents or self.mech == "meteor"):
+            return
+        self.mech_t -= dt
+        if self.mech_t > 0:
+            return
+        if self.pads:  # 星际空港：补给台空投
+            self.mech_t = SUPPLY_PERIOD
+            for i in self.pads:
+                x, y = i % self.W, i // self.W
+                if self.blocks[i] == "." and i not in self.powerups and not self.bomb_at(x, y):
+                    kind = _weighted(self.rng, CHEST_TABLE)
+                    if self.items_on and self.rng.random() < 0.3:
+                        kind = self.rng.choice(ITEM_KINDS)
+                    self.powerups[i] = kind
+                    if kind in ITEM_KINDS:
+                        self._claim_item(i)
+                    self.events.append({"k": "supply", "x": x, "y": y})
+        elif self.vents:  # 烈日斗兽场：火焰喷口
+            self.mech_t = VENT_PERIOD
+            for i in self.vents:
+                if self.blocks[i] != "#":
+                    self._hazard(i % self.W, i // self.W, VENT_RANGE)
+        else:  # 火山孤岛：陨石
+            self.mech_t = METEOR_PERIOD
+            cand = [i for i, blk in enumerate(self.blocks) if blk in (".", "b", "x") and not self._shrunk(i)]
+            # 一颗砸在随机一名玩家附近，其余随机落下
+            alive = [p for p in self.players if p.alive]
+            picks: list[int] = []
+            if alive:
+                t = self.rng.choice(alive)
+                near = [i for i in cand if abs(i % self.W - rnd(t.x)) + abs(i // self.W - rnd(t.y)) <= 3]
+                if near:
+                    picks.append(self.rng.choice(near))
+            while len(picks) < METEOR_COUNT and cand:
+                i = self.rng.choice(cand)
+                if i not in picks:
+                    picks.append(i)
+            for i in picks:
+                self._hazard(i % self.W, i // self.W, METEOR_RANGE)
+
+    def _respawn(self, p: Player) -> None:
+        """复活赛：服务器在全图随机挑一个空格复活。复活后无敌 3 秒，所以不用避开炸弹 / 火焰；
+        只要求是空地（不是传送门 / 闸门），且四周至少能走一步，不会被困在死角里。"""
+
+        def open_cell(x: int, y: int) -> bool:
+            return self.in_bounds(x, y) and self.blocks[y * self.W + x] in (".", "b") and not self.bomb_at(x, y)
+
+        cand = [
+            (i % self.W, i // self.W)
+            for i, blk in enumerate(self.blocks)
+            if blk in (".", "b") and i not in self.tele and self.floor[i] not in ("w", "u")
+            and not self.bomb_at(i % self.W, i // self.W)
+            and any(open_cell(i % self.W + dx, i // self.W + dy) for dx, dy in DIRS.values())
+        ]
+        if not cand:  # 几乎不会发生：退回出生点
+            cand = list(self.spawn_points)
+        x, y = self.rng.choice(cand)
+        p.x, p.y = float(x), float(y)
+        p.alive = True
+        p.respawn_t = 0.0
+        p.trapped = 0
+        p.trap_by = None
+        p.invuln = INVULN_RESPAWN
+        p.death_at = None
+        p.moving = False
+        p.in_dir = p.tap_dir = None
+        p.tele_lock = False
+        p.pending_hit = None
+        p.move_budget = 0.0
+        p.fix += 1  # 让客户端立即同步到复活位置（并丢弃复活前还在路上的位置上报）
+        self.events.append({"k": "respawn", "id": p.id, "x": x, "y": y})
 
     def drop_wall(self, i: int) -> None:
         self.blocks[i] = "#"
@@ -1050,8 +1281,30 @@ class Game:
             if rnd(p.x) == x and rnd(p.y) == y:
                 self.die(p, None)
 
+    def revive_score(self, p: Player) -> float:
+        """复活赛个人得分：个人赛 = 击倒；团队赛 = 击倒 + 0.5 × 救援。"""
+        return p.kills + (0.5 * p.rescues if self.mode == "team" else 0)
+
     def check_end(self) -> None:
         if self.phase != "play":
+            return
+        if self.revive:
+            teams = {p.team for p in self.players if not p.quit}
+            if len(teams) <= 1:  # 对手都退出了
+                self.finish(next(iter(teams)) if teams else None)
+            elif self.time_left <= 0:
+                if self.mode == "team":
+                    score: dict[int, float] = {}
+                    for p in self.players:
+                        if not p.quit:
+                            score[p.team] = score.get(p.team, 0) + self.revive_score(p)
+                    best = max(score.values())
+                    top = [t for t, v in score.items() if v == best]
+                    self.finish(top[0] if len(top) == 1 else None)
+                else:
+                    keys = sorted(((p.kills, -p.deaths), p.team) for p in self.players if not p.quit)
+                    unique = len(keys) == 1 or keys[-1][0] != keys[-2][0]
+                    self.finish(keys[-1][1] if unique and keys[-1][0][0] > 0 else None)
             return
         alive = [p for p in self.players if p.alive]
         teams = {p.team for p in alive}
@@ -1077,13 +1330,23 @@ class Game:
         def key(p: Player):
             if p.quit:
                 return (True, 2, 0, 0)  # 退出的玩家排在最后
+            if self.revive:
+                return (not won(p), 0, -self.revive_score(p), p.deaths)
             if p.alive:
                 return (not won(p), 0, p.trapped > 0, -p.kills)
             return (not won(p), 1, -(p.death_at or 0), -p.kills)
 
         ranked = sorted(self.players, key=key)
+        # 复活赛：按个人得分排前三名（得分 > 0）分别 +25% / +15% / +5% 点数
+        rank_bonus: dict[str, int] = {}
+        if self.revive:
+            order = sorted((p for p in self.players if not p.quit and self.revive_score(p) > 0),
+                           key=lambda p: (-self.revive_score(p), p.deaths))
+            for p, b in zip(order, RANK_BONUS):
+                rank_bonus[p.id] = b
         self.result = {
             "mode": self.mode,
+            "revive": self.revive,
             "mapId": self.map_id,
             "draw": winner_team is None,
             "winnerTeam": winner_team,
@@ -1104,6 +1367,9 @@ class Game:
                     "quit": p.quit,
                     "avatar": p.avatar,
                     "level": p.level,
+                    "streak": p.streak,  # 结束时的连杀（结算时折算加成）
+                    "deaths": p.deaths,
+                    **({"score": self.revive_score(p), "rankBonus": rank_bonus.get(p.id, 0)} if self.revive else {}),
                 }
                 for k, p in enumerate(ranked)
             ],
@@ -1126,6 +1392,7 @@ class Game:
             "floor": "".join(self.floor),
             "water": "".join("~" if b == "~" else "." for b in self.blocks),
             "mode": self.mode,
+            "revive": self.revive,
             "roundTime": self.round_time,
             "items": self.items_on,
             "sdTime": self.sd_time,
@@ -1153,6 +1420,7 @@ class Game:
             "st": self.server_ms(),
             "tk": self.tick_no,
             "ph": self.phase,
+            **({"wt": sorted(self.waiting), "wl": math.ceil(max(0.0, self.wait_left))} if self.phase == "wait" else {}),
             "cd": math.ceil(max(0.0, self.countdown)),
             "tl": max(0.0, round(self.time_left, 1)),
             "sd": 1 if self.sd_started else 0,
@@ -1176,6 +1444,7 @@ class Game:
                     "fx": p.fix,
                     "tl": 1 if p.tele_lock else 0,
                     "it": ",".join(p.items),  # 道具栏 6 格
+                    **({"rs": round(p.respawn_t, 1)} if p.respawn_t > 0 else {}),
                     **_effects(p),
                 }
                 for p in self.players
@@ -1196,6 +1465,7 @@ class Game:
         """所有已知炸弹（含连锁、油桶二次爆炸）的 [爆炸时刻, 覆盖格子, 炸弹所在格]。
         extra=(px,py,fuse,range) 或它的列表：假设再放下的炸弹。"""
         src = [(b.px, b.py, b.fuse, b.range) for b in self.bombs]
+        src.extend((hx, hy, ht, hr) for ht, hx, hy, hr in self.hazards)  # 已预警的喷火 / 陨石
         if extra:
             src.extend(extra if isinstance(extra, list) else [extra])
         info = [[max(0.0, fu), self.blast_tiles(px, py, r), self.idx(px, py)] for px, py, fu, r in src]
@@ -1252,6 +1522,15 @@ class Game:
         for i, eta in self.wall_eta().items():
             d[i] = min(d[i], eta)
         return d
+
+
+def _weighted(rng: random.Random, table: list[tuple[str, int]]) -> str:
+    r = rng.random() * sum(w for _, w in table)
+    for k, w in table:
+        r -= w
+        if r < 0:
+            return k
+    return table[-1][0]
 
 
 def _effects(p: Player) -> dict:

@@ -373,7 +373,7 @@ def think(g: "Game", p: "Player", dt: float) -> None:
         x, y = i % W, i // W
         for dx, dy in DIRS.values():
             nx, ny = x + dx, y + dy
-            if g.in_bounds(nx, ny) and g.blocks[ny * W + nx] in ("x", "m", "e"):
+            if g.in_bounds(nx, ny) and g.blocks[ny * W + nx] in ("x", "m", "e", "g"):
                 return True
         return False
 
@@ -585,7 +585,7 @@ def _sees(g: "Game", ai: BotState, o: "Player") -> bool:
 
 def _rescue_items(g: "Game", p: "Player", win: dict, speed: float, prof: Profile) -> bool:
     """难：躲不掉的时候按顺序试：腾飞之翼（穿过炸弹能逃）→ 超级跑鞋（跑得更快能逃）→ 无敌盾牌（火快到了）。"""
-    from .game import BLOCKING, MAX_SPEED_LV, SPEED_STEP
+    from .game import BLOCKING, BOOTS_SPEED_LV, SPEED_STEP
 
     if "wings" in p.items and p.wings_t <= 0:
         def fly(x: int, y: int) -> bool:
@@ -596,7 +596,7 @@ def _rescue_items(g: "Game", p: "Player", win: dict, speed: float, prof: Profile
             p.in_dir = d
             return True
     if "boots" in p.items and p.boots_t <= 0:
-        fast = speed * (1 + SPEED_STEP * MAX_SPEED_LV) / (1 + SPEED_STEP * g.speed_level(p))
+        fast = speed * (1 + SPEED_STEP * BOOTS_SPEED_LV) / (1 + SPEED_STEP * g.speed_level(p))
         ok, d = timed_escape(g, p, win, fast, prof.margin)
         if ok:
             g.use_item(p.id, p.items.index("boots"))

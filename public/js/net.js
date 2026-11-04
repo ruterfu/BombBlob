@@ -170,8 +170,9 @@ export class Connection {
     ws.dropped = true;
     this.online = false;
     this.channel = null;
+    if (this.closedByUser) return; // 主动关闭（退出登录等）：不是断线，不通知界面、不重连
     this.handlers.close?.(code, this.retry);
-    if (this.closedByUser || code === 4001 || code === 4000) return;
+    if (code === 4001 || code === 4000) return;
     const delay = Math.min(4000, 400 * 2 ** this.retry++);
     setTimeout(() => { if (!this.closedByUser) this.connect(); }, delay);
   }

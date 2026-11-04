@@ -4,7 +4,7 @@ import unittest
 import zlib
 
 from backend.game import (
-    FLAME_TIME, FUSE, INVULN_START, MAX_BOMBS, TICK_RATE, TRAP_TIME, Bomb, Game,
+    FLAME_TIME, FUSE, INVULN_START, MAX_BOMBS, TICK_RATE, TRAP_TIME, Bomb, Game, rnd,
 )
 from backend.maps import MAPS, W, H, build_map
 
@@ -41,8 +41,8 @@ def run(g, seconds):
 
 
 class MapTests(unittest.TestCase):
-    def test_eight_maps_enlarged(self):
-        self.assertEqual(len(MAPS), 8)
+    def test_fourteen_maps_enlarged(self):
+        self.assertEqual(len(MAPS), 14)
         self.assertEqual((W, H), (23, 19))  # 15x13 的约 1.5 倍
         for m in MAPS:
             self.assertEqual(len(m["rows"]), H)
@@ -253,12 +253,12 @@ class RuleTests(unittest.TestCase):
         base = self.g.player_speed(a)
         for _ in range(10):
             self.g.apply_powerup(a, "speed")
-        self.assertAlmostEqual(self.g.player_speed(a) / base, 1.25, places=3)
+        self.assertAlmostEqual(self.g.player_speed(a) / base, 1.35, places=3)
         for _ in range(20):
             self.g.apply_powerup(a, "slow")
         self.assertAlmostEqual(self.g.player_speed(a) / base, 0.75, places=3)
 
-    def test_bomb_capacity_1_to_5(self):
+    def test_bomb_capacity_1_to_8(self):
         a = self.g.players[0]
         self.assertEqual(a.max_bombs, 1)
         self.g.apply_powerup(a, "bomb")
@@ -266,14 +266,22 @@ class RuleTests(unittest.TestCase):
         for _ in range(10):
             self.g.apply_powerup(a, "bomb")
         self.assertEqual(a.max_bombs, MAX_BOMBS)
-        self.assertEqual(MAX_BOMBS, 5)
+        self.assertEqual(MAX_BOMBS, 8)
 
-    def test_power_3x3_to_11x11(self):
+    def test_power_3x3_to_13x13(self):
         a = self.g.players[0]
         self.assertEqual(a.range, 1)
         for _ in range(10):
             self.g.apply_powerup(a, "fire")
-        self.assertEqual(a.range, 5)
+        self.assertEqual(a.range, 6)
+
+    def test_max_powerup_plus_50_percent(self):
+        a = self.g.players[0]
+        seen = []
+        for _ in range(5):
+            self.g.apply_powerup(a, "max")
+            seen.append(a.range)
+        self.assertEqual(seen, [2, 3, 5, 6, 6])  # 3×3 → 5×5 → 7×7 → 11×11 → 13×13（封顶）
 
     def test_steel_crate_needs_two_hits(self):
         g = self.g
@@ -451,6 +459,29 @@ class RuleTests(unittest.TestCase):
         self.assertNotIn("k", s2)
 
 
+class WaitPhaseTests(unittest.TestCase):
+    def test_waits_for_humans_then_countdown(self):
+        from backend.game import WAIT_MAX
+        players = [{"id": "h1", "name": "a", "skin": 0, "hat": 0}, {"id": "h2", "name": "b", "skin": 1, "hat": 0},
+                   {"id": "bot", "name": "c", "skin": 2, "hat": 0, "is_bot": True}]
+        g = Game("meadow", "ffa", 1, players, rng=random.Random(1))
+        self.assertEqual((g.phase, g.waiting), ("wait", {"h1", "h2"}))  # 机器人不用等
+        run_ticks(g, TICK_RATE * 2)
+        self.assertEqual(g.phase, "wait")
+        self.assertEqual(g.snapshot()["wt"], ["h1", "h2"])
+        g.player_loaded("h1")
+        g.forfeit("h2")  # 退出 / 断线：不再等
+        run_ticks(g, 1)
+        self.assertEqual(g.phase, "countdown")
+        self.assertNotIn("wt", g.snapshot())
+
+    def test_wait_times_out(self):
+        from backend.game import WAIT_MAX
+        g = Game("meadow", "ffa", 1, [{"id": "h1", "name": "a", "skin": 0, "hat": 0}, {"id": "h2", "name": "b", "skin": 1, "hat": 0}])
+        run_ticks(g, int(TICK_RATE * (WAIT_MAX + 0.1)))
+        self.assertEqual(g.phase, "countdown")  # 最多等 15 秒
+
+
 class SyncRateTests(unittest.TestCase):
     def test_broadcast_rate(self):
         for hz in (10, 25, 30, 60):
@@ -500,6 +531,81 @@ class BotSmokeTests(unittest.TestCase):
                 self.assertIsNotNone(g.result, f"{m['id']}/{mode} 没有结束")
                 # 很快分出胜负说明在积极进攻；拖得久的对局则要求有足够多的爆炸
                 self.assertTrue(booms[0] > 30 or g.elapsed < 120, f"{m['id']}/{mode} 机器人太被动（{booms[0]} 次爆炸 / {g.elapsed:.0f} 秒）")
+
+
+class StreakAndReviveTests(unittest.TestCase):
+    def _game(self, mode="ffa", revive=True, n=3):
+        players = [{"id": f"p{i}", "name": f"p{i}", "skin": i, "hat": 0, "team": i % 2} for i in range(n)]
+        g = Game("meadow", mode, 1, players, rng=random.Random(1), revive=revive)
+        g.phase = "play"
+        for p in g.players:
+            p.invuln = 0
+        return g
+
+    def test_streak_resets_when_trapped(self):
+        g = self._game(revive=False)
+        a = g.players[0]
+        g._credit_kill(a)
+        g._credit_kill(a)
+        self.assertEqual(a.streak, 2)
+        g.hit(a, "p1")
+        self.assertEqual(a.streak, 0)
+        g._credit_kill(a)
+        self.assertEqual((a.kills, a.streak), (3, 1))
+
+    def test_revive_drops_everything_and_respawns(self):
+        g = self._game()
+        clear_map(g)
+        a = g.players[0]
+        a.max_bombs, a.range, a.speed_lv, a.kick = 4, 3, 2, True
+        a.items = ["needle", "boots", "", "", "", ""]
+        g.die(a, None)
+        self.assertFalse(a.alive)
+        self.assertEqual(sorted(g.powerups.values()), sorted(["bomb"] * 3 + ["fire"] * 2 + ["speed"] * 2 + ["kick", "needle", "boots"]))
+        self.assertEqual((a.max_bombs, a.range, a.speed_lv, a.kick, a.items), (1, 1, 0, False, [""] * 6))
+        fix = a.fix
+        run(g, 3.1)
+        self.assertTrue(a.alive)
+        self.assertGreater(a.invuln, 0)
+        self.assertEqual(a.fix, fix + 1)
+        self.assertEqual(g.blocks[rnd(a.y) * g.W + rnd(a.x)], ".")  # 随机复活在空地上
+
+    def test_normal_mode_drops_unused_items(self):
+        g = self._game(revive=False)
+        clear_map(g)
+        a = g.players[0]
+        a.items = ["ghost", "", "wings", "", "", ""]
+        g.die(a, None)
+        self.assertEqual(sorted(g.powerups.values()), ["ghost", "wings"])
+        run(g, 4)
+        self.assertFalse(a.alive)  # 普通模式不会复活
+
+    def test_revive_ffa_ranking_and_bonus(self):
+        g = self._game(n=4)
+        g.shrink = False
+        a, b, c, d = g.players
+        a.kills, b.kills, c.kills, d.kills = 5, 3, 1, 0
+        g.time_left = 0
+        g.check_end()
+        self.assertEqual(g.result["winnerTeam"], a.team)
+        bonus = {p["id"]: p.get("rankBonus") for p in g.result["players"]}
+        self.assertEqual(bonus, {"p0": 25, "p1": 15, "p2": 5, "p3": 0})
+        self.assertEqual(g.result["players"][0]["id"], "p0")
+
+    def test_revive_team_weighted_score(self):
+        g = self._game(mode="team", n=4)
+        a, b, c, d = g.players  # 队伍 0: a, c；队伍 1: b, d
+        a.kills, c.rescues = 1, 2  # 1 + 0.5×2 = 2
+        b.kills, d.rescues = 1, 1  # 1 + 0.5 = 1.5
+        g.time_left = 0
+        g.check_end()
+        self.assertEqual(g.result["winnerTeam"], 0)
+        bonus = {p["id"]: p.get("rankBonus") for p in g.result["players"]}
+        self.assertEqual(bonus["p0"] + bonus["p1"] + bonus["p2"], 25 + 15 + 5)
+        self.assertEqual(bonus["p3"], 0)  # d（0.5 分）排第 4，没有加成
+
+    def test_revive_disables_shrink(self):
+        self.assertFalse(self._game().shrink)
 
 
 if __name__ == "__main__":

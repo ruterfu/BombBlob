@@ -165,7 +165,7 @@ def _empty(m: dict) -> dict:
 WS_READERS = {
     "mv": _mv, "bomb": _bomb, "in": _in, "ping": _ping, "use": _use,
     "lobby": _empty, "quickJoin": _empty, "leaveRoom": _empty, "start": _empty, "addBot": _add_bot, "botLevel": _bot_level,
-    "history": _empty, "leaderboard": _empty,
+    "history": _empty, "leaderboard": _empty, "loaded": _empty,
     "createRoom": _create_room, "joinRoom": _join_room, "ready": _ready, "team": _team,
     "settings": _room_settings, "kick": _kick, "chat": _chat, "rename": _rename, "buy": _buy,
     "profile": _profile, "createCharacter": _create_character,
