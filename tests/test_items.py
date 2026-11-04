@@ -108,6 +108,7 @@ class InventoryTests(unittest.TestCase):
         self.assertFalse(g.client_move("a", 4.5, 3.0, epoch=a.fix))  # 没有翅膀：被炸弹挡住
         a.items[0] = "wings"
         g.use_item("a", 0)
+        self.assertEqual(a.wings_t, 30.0)  # 腾飞之翼持续 30 秒
         a.move_budget = 5
         self.assertTrue(g.client_move("a", 4.5, 3.0, epoch=a.fix))
         a.x, a.y = 5.0, 3.0

@@ -1287,6 +1287,7 @@ export class GameScene {
     const x = Math.round(this.pred.x), y = Math.round(this.pred.y);
     const mine = s.b.filter((b) => b[5] === this.myId).length + this.ghosts.length;
     if (mine >= me.mb || this.bombBlocked(x, y)) return pos;
+    if (s.f.some((f) => f[0] === y * this.W + x)) return pos; // 正在燃烧的格子不能放（与服务器规则一致）
     const blk = this.blockStr?.[y * this.W + x];
     if (blk !== '.' && blk !== 'b') return pos;
     const meInfo = this.info.players.find((p) => p.id === this.myId);

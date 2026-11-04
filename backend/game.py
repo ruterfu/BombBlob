@@ -36,6 +36,7 @@ COUNTDOWN = 3.0
 WAIT_MAX = 15.0  # 开局前等待玩家加载完成（连接就绪）的最长时间，超时后不再等
 FUSE = 2.5
 FLAME_TIME = 0.55
+BOMB_REFILL_DELAY = FLAME_TIME  # 炸弹用完时：自己的炸弹爆炸后要等火焰结束才能再放（还有炸弹时连放不受限制）
 INVULN_RESCUE = 3.0  # 被救活后无敌 3 秒
 INVULN_START = 3.0  # 开局无敌 3 秒
 RESPAWN_TIME = 3.0  # 复活赛：被淘汰后多久自动复活
@@ -86,13 +87,13 @@ POWERUP_TABLE = [("bomb", 26), ("fire", 28), ("speed", 16), ("slow", 10), ("shie
                  # 道具（放进道具栏，按 1–6 使用）
                  ("needle", 5), ("ishield", 4), ("boots", 4), ("ghost", 3), ("wings", 3)]
 # 道具：针（被困时使用，立即脱困）/ 无敌盾牌（3 秒内不会被炸到）/ 超级跑鞋（5 秒速度 +50%）
-#       透明人（隐身 10 秒）/ 腾飞之翼（5 秒内可以穿过炸弹，被火焰炸到照样判定）
+#       透明人（隐身 10 秒）/ 腾飞之翼（30 秒内可以穿过炸弹，被火焰炸到照样判定）
 ITEM_KINDS = ("needle", "ishield", "boots", "ghost", "wings")
 ITEM_SLOTS = 6
 ISHIELD_TIME = 3.0
 BOOTS_TIME = 5.0
 GHOST_TIME = 10.0
-WINGS_TIME = 5.0
+WINGS_TIME = 30.0  # 腾飞之翼：30 秒内可以越过炸弹
 BLOCKING = ("#", "x", "m", "e", "g", "w", "Y", "H", "~")
 HARD = ("#", "Y", "H", "w")  # 挡住火焰且不可破坏（w = 升起的冰墙闸门）
 SOFT = ("x", "m", "e", "g")  # 挡住火焰、可被炸毁
@@ -192,6 +193,7 @@ class Player:
     boots_t: float = -1.0  # 超级跑鞋
     ghost_t: float = -1.0  # 透明人
     wings_t: float = -1.0  # 腾飞之翼
+    bomb_ready_at: float = 0.0  # 炸弹用完后，最早可以再放炸弹的时刻（对局时间）
     streak: int = 0  # 当前连杀（被泡泡包住就清零；不在游戏中显示，结算时折算点数加成）
     deaths: int = 0
     respawn_t: float = 0.0  # 复活赛：距离复活还剩几秒（> 0 表示正在等待复活）
@@ -883,6 +885,10 @@ class Game:
         x, y = rnd(p.x), rnd(p.y)
         if self.active_bombs(p) >= p.max_bombs or self.bomb_at(x, y):
             return
+        if self.elapsed < p.bomb_ready_at:
+            return  # 炸弹用完后刚爆炸：等这次爆炸的火焰结束
+        if y * self.W + x in self.flames:
+            return  # 不能放在正在燃烧的格子上（否则会被立即引爆，原地连放连炸）
         if self.blocks[y * self.W + x] not in WALKABLE_FOR_BOMB:
             return
         self.bombs.append(Bomb(self.next_bomb_id, p.id, p.skin, x, y, float(x), float(y), FUSE, p.range, style=p.bomb_style))
@@ -942,6 +948,10 @@ class Game:
     def explode(self, b: Bomb) -> None:
         if b not in self.bombs:
             return
+        if not b.barrel:
+            o = self.player(b.owner)
+            if o is not None and self.active_bombs(o) >= o.max_bombs:
+                o.bomb_ready_at = self.elapsed + BOMB_REFILL_DELAY  # 炸弹用完时，等火焰结束才能再放
         self.bombs.remove(b)
         cx, cy = rnd(b.px), rnd(b.py)
         self.events.append({"k": "boom", "x": cx, "y": cy, "r": b.range, "barrel": b.barrel, "st": b.style})

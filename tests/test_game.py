@@ -653,5 +653,56 @@ class ItemModeTests(unittest.TestCase):
         self.assertIsNone(g.airdrop_t)
 
 
+class BombRefillTests(unittest.TestCase):
+    def _game(self):
+        players = [{"id": f"p{i}", "name": f"p{i}", "skin": i, "hat": 0} for i in range(2)]
+        g = Game("meadow", "ffa", 1, players, rng=random.Random(1), shrink=False)
+        clear_map(g)
+        g.phase = "play"
+        a, b = g.players
+        a.x, a.y, b.x, b.y = 5.0, 3.0, 15.0, 13.0
+        a.invuln = 999  # 站在原地被炸也不会被困，专门测「原地连放」
+        return g, a
+
+    def test_cannot_chain_bombs_in_place(self):
+        """原来：炸弹一爆，马上在同一格（还在燃烧）再放一颗，会被立即引爆，原地连放连炸 2–3 颗。"""
+        g, a = self._game()
+        g.place_bomb(a)
+        g.bombs[0].fuse = 0.01
+        booms = 0
+        for _ in range(int(0.6 * TICK_RATE)):  # 火焰持续期间每一帧都尝试再放
+            g.place_bomb(a)
+            before = len(g.bombs)
+            g.tick()
+            booms += sum(e["k"] == "boom" for e in g.events)
+            g.events = []
+        self.assertEqual(booms, 1)
+
+    def test_refill_waits_for_flames_when_out_of_bombs(self):
+        g, a = self._game()
+        g.place_bomb(a)
+        g.bombs[0].fuse = 0.01
+        g.tick()  # 爆炸
+        a.x = 7.0  # 离开火焰
+        g.place_bomb(a)
+        self.assertEqual(g.active_bombs(a), 0)  # 火焰还没结束：不能放（即使站在火焰外）
+        run(g, 0.3)
+        g.place_bomb(a)
+        self.assertEqual(g.active_bombs(a), 0)
+        run(g, 0.3)  # 火焰（0.55 秒）结束后可以放
+        g.place_bomb(a)
+        self.assertEqual(g.active_bombs(a), 1)
+
+    def test_no_delay_while_bombs_remain(self):
+        g, a = self._game()
+        a.max_bombs = 2
+        g.place_bomb(a)
+        g.bombs[0].fuse = 0.01
+        g.tick()
+        a.x = 7.0
+        g.place_bomb(a)
+        self.assertEqual(g.active_bombs(a), 1)  # 没用完：爆炸后可以立即再放
+
+
 if __name__ == "__main__":
     unittest.main()
