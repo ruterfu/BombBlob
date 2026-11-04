@@ -105,7 +105,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         # 明文 / 用户数据接口已移除：登录后只能通过加密 WebSocket 通信
         self.assertEqual((await self.client.get("/api/me")).status, 404)
         self.assertEqual((await self.client.get("/api/leaderboard")).status, 404)
-        ws = await self.client.ws_connect("/gamesocket?session=bad")
+        ws = await self.client.ws_connect("/api/gamesocket?session=bad")
         await ws.receive()
         self.assertEqual(ws.close_code, 4001)
 
@@ -261,6 +261,18 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await recv_until(ws, "pong"))["ts"], 3)
 
     # ---------- 房间 / 地图 / 机器人 ----------
+    async def test_all_backend_routes_under_api(self):
+        """后端接口统一以 /api 开头；旧地址不再可用。"""
+        self.assertEqual((await self.client.get("/api/login-info")).status, 200)
+        self.assertEqual((await self.client.get("/api/maps")).status, 200)
+        self.assertEqual((await self.client.get("/api/health")).status, 200)
+        for old in ("/login-info", "/gamesocket", "/auth/github", "/oauth/callback", "/auth/github/callback"):
+            self.assertEqual((await self.client.get(old, allow_redirects=False)).status, 404, old)
+        a = await self.login("路由")
+        ws = await self.connect(a)  # 走 /api/gamesocket（已收到 welcome）
+        await ws.send_json({"t": "ping", "ts": 7})
+        self.assertEqual((await recv_until(ws, "pong"))["ts"], 7)
+
     async def test_room_options_via_websocket(self):
         """创建房间 / 修改设置的每个玩法选项都要能经过消息校验到达服务器（复活赛曾被白名单漏掉）。"""
         a = await self.login("房主")

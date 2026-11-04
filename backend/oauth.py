@@ -1,8 +1,8 @@
 """GitHub OAuth（授权码模式）。
 
 流程：
-  1. GET /auth/github              生成随机 state（服务器内存 + HttpOnly Cookie 双重校验），跳转到 GitHub 授权页
-  2. GET /auth/github/callback     校验 state → 用 code 换 access_token → 读取 GitHub 用户信息
+  1. GET /api/auth/github              生成随机 state（服务器内存 + HttpOnly Cookie 双重校验），跳转到 GitHub 授权页
+  2. GET /api/oauth/callback       校验 state → 用 code 换 access_token → 读取 GitHub 用户信息
                                    → 查找或创建账号 → 生成 60 秒有效、只能使用一次的交换码
                                    → 跳回 /#oauth=<交换码>（URL 片段不会发送到服务器或出现在日志里）
   3. POST /api/oauth/exchange      前端用交换码换取一次性登录 token 与 session

@@ -559,7 +559,7 @@ async function boot() {
   $('#github-block').classList.toggle('hidden', !cfg.github);
   $('#guest-block').classList.toggle('hidden', !cfg.guest);
   $('#login-split').classList.toggle('hidden', !(cfg.guest && cfg.github));
-  $('#btn-github').onclick = () => { audio.unlock(); location.href = '/auth/github?lang=' + encodeURIComponent(wireLang(getLang())); };
+  $('#btn-github').onclick = () => { audio.unlock(); location.href = '/api/auth/github?lang=' + encodeURIComponent(wireLang(getLang())); };
 
   // GitHub 回跳：#oauth=<一次性交换码> 或 #oauth_error=<原因>
   const hash = new URLSearchParams(location.hash.slice(1));
@@ -611,6 +611,8 @@ function resetLoginForm(notice) {
 
 /** 登录成功后等待连接建立的时间；超时（还停在登录页）就断开并提示，而不是无限等待 */
 const CONNECT_WAIT_MS = 12000;
+/** 断线后最多重连多久：超过就放弃，回到登录页重新登录（服务器重启失败 / 一直连不上时不会卡在重连遮罩上） */
+const RECONNECT_GIVEUP_MS = 10000;
 
 async function doLogin(fn, auto = false) {
   const btns = [$('#btn-guest'), $('#btn-id-login')];
@@ -671,6 +673,8 @@ function setReconnecting(on, attempt = 0) {
  *  WebSocket 只在登录成功后建立；回到登录页（退出 / 会话失效 / 连不上）时一定先调用这里。 */
 function endSession() {
   clearTimeout(state.connWait);
+  clearTimeout(state.giveUp);
+  state.giveUp = null;
   state.conn?.close();
   state.conn = null;
   setReconnecting(false);
@@ -689,6 +693,8 @@ function startConnection(login) {
     open: () => {
       if (state.conn !== conn) return;
       clearTimeout(state.connWait);
+      clearTimeout(state.giveUp);
+      state.giveUp = null;
       setReconnecting(false);
       if (state.pendingLang) {
         send({ t: 'profile', lang: state.pendingLang });
@@ -713,6 +719,22 @@ function startConnection(login) {
         toast(t('conn.replaced'), true);
       } else if (state.screen !== 'login') {
         setReconnecting(true, attempt);
+        // 第一次断线时开始计时：10 秒内没重新连上，就回到登录页（独立计时，某次重连卡住也照样触发）
+        if (!state.giveUp) {
+          state.giveUp = setTimeout(() => {
+            if (state.conn !== conn || conn.online) return;
+            endSession();
+            state.room = null;
+            state.inRoom = false;
+            state.game = null;
+            $('#result-modal')?.classList.add('hidden');
+            $('#id-modal').classList.add('hidden');
+            resetLoginForm(t('conn.lostLogin'));
+            if (state.loginCfg?.guest) $('#login-id').value = savedId();
+            toast(t('conn.lostLogin'), true);
+            show('login');
+          }, RECONNECT_GIVEUP_MS);
+        }
       }
     },
   });

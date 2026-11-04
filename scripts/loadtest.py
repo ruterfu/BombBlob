@@ -53,7 +53,7 @@ async def run_client(session, url, c: Client, is_host: bool, room_fut: asyncio.F
     k, wire = secure.client_seal_request(PUBLIC_KEY, {"name": f"压测{c.idx}"})
     r = secure.client_open_response(k, await (await session.post(f"{url}/api/guest", json=wire)).json())
     c.uid = r["user"]["id"]
-    raw_ws = await session.ws_connect(f"{url.replace('http', 'ws')}/gamesocket?session={r['session']}", max_msg_size=0)
+    raw_ws = await session.ws_connect(f"{url.replace('http', 'ws')}/api/gamesocket?session={r['session']}", max_msg_size=0)
     hello = await raw_ws.receive_json()
     ch = secure.Channel(secure.unb64(r["key"]), hello["c"], secure.C2S)
 

@@ -37,7 +37,7 @@ cp .env.example .env                                  # 按需修改（默认开
 - 登录页只有两个入口：**连接 GitHub**（`LOGIN_GITHUB=true`）和 **游客登录**（`LOGIN_GUEST=true`）。
 - **GitHub 登录**：OAuth 授权码模式，不申请任何权限，只取 GitHub 用户 ID（绑定账号）和头像（显示给其他玩家）；不保存 GitHub 用户名。state + Cookie 防 CSRF，回调后用 60 秒有效的一次性交换码换取凭证。
 - **游客登录**：自动创建账号并弹出 **8 位数字 ID**（新 ID 不含数字 4）；游客模式开启时，也可以在游客按钮下方用 8 位 ID 登录。
-- **登录页**：进入时请求 `/login-info`。`LOGIN_GITHUB` 开启时显示「GitHub 登录」；`LOGIN_GUEST` 开启时显示「8 位 ID 输入框 + 游客登录」；两个都开启时都显示；两个都关闭时服务器无法启动。关闭的那种登录方式，其接口直接 404。
+- **登录页**：进入时请求 `/api/login-info`。`LOGIN_GITHUB` 开启时显示「GitHub 登录」；`LOGIN_GUEST` 开启时显示「8 位 ID 输入框 + 游客登录」；两个都开启时都显示；两个都关闭时服务器无法启动。关闭的那种登录方式，其接口直接 404。
 - **不自动登录**：每次都要手动点登录，GitHub 每次都要授权一次。localStorage 不保存任何登录凭证，只保存语言、音量和上次的 8 位游客 ID（打开页面时填回输入框）。`/api/guest` 里原来的 token 自动登录代码已注释停用。
 - **创建角色**：新账号登录后先进入「创建角色」（名字、颜色、头饰），完成后才进入大厅。
 - **名字规则**：先 trim，长度 1–8 个字；只允许文字、字母、数字和空格；屏蔽不雅词（中 / 繁 / 粤 / 日 / 英）和冒充系统的词（如「断开连接」「系统」「Admin」），比对时会去掉空格符号、统一全角与大小写，防止拆字绕过。之后改名需要商店的**改名卡**。
@@ -46,7 +46,7 @@ cp .env.example .env                                  # 按需修改（默认开
 
 1. 网页写死 RSA-2048 公钥（`public/js/rsa-public.js`，一行，方便替换），服务器持有私钥（`RSA_PRIVATE_KEY`）。
 2. 登录请求：网页生成一次性 AES-128 密钥，用 RSA-OAEP(SHA-256) 加密后连同 AES-128-GCM 加密的请求体发送；响应也用它加密，并带回本次会话的 **AES-128 会话密钥**（唯一 token，从不以明文出现）。
-3. 游戏 WebSocket（`/gamesocket`）全部是 AES-128-GCM 二进制帧，IV = 方向 ‖ 连接号 ‖ 帧序号：截获的帧无法重放、调换顺序或用在别的连接上，校验失败立即断开（关闭码 4002）。
+3. 游戏 WebSocket（`/api/gamesocket`）全部是 AES-128-GCM 二进制帧，IV = 方向 ‖ 连接号 ‖ 帧序号：截获的帧无法重放、调换顺序或用在别的连接上，校验失败立即断开（关闭码 4002）。
 4. 未加密的登录请求返回 `400 {"code":"bad_request"}`，明文 WebSocket 帧被忽略；排行榜、对战记录等数据只走加密通道。
 5. 换密钥：`python scripts/gen_rsa.py`（写入 `rsa-public.js` 与 `.env`）或 `--print`（只打印单行私钥，用于 `docker run -e`）。服务器启动时检查公私钥是否配对。
 
@@ -304,7 +304,7 @@ psql "$DATABASE_URL" -f db/init.sql   # 可重复执行，不会覆盖线上调�
 
 ```
 backend/
-  server.py   HTTP 入口、加密登录接口、/gamesocket
+  server.py   HTTP 入口、加密登录接口、/api/gamesocket
   lobby.py    大厅、房间（密码 / 断线宽限）、聊天、商店 / 改名 / 对战记录等消息路由
   game.py     服务器权威的游戏模拟（60Hz，默认 30Hz 广播）、客户端移动校验
   bot.py      机器人 AI（与真人使用同一套输入接口）

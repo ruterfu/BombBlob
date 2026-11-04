@@ -25,7 +25,7 @@ CFG_KEY = web.AppKey("config", Config)
 GH_KEY = web.AppKey("github", GitHubOAuth)
 RSA_KEY = web.AppKey("rsa", object)
 STATE_COOKIE = "bb_oauth_state"
-CALLBACK_PATH = "/oauth/callback"  # 需与 GitHub OAuth App 中登记的 Authorization callback URL 一致
+CALLBACK_PATH = "/api/oauth/callback"  # 需与 GitHub OAuth App 中登记的 Authorization callback URL 一致
 
 
 class Sealed(Exception):
@@ -275,16 +275,16 @@ def create_app(dsn: str | None = None, config: Config | None = None, github: Git
     if dsn:
         app[DSN_KEY] = dsn
     app.cleanup_ctx.append(_db_ctx)
-    app.router.add_get("/login-info", login_info)
+    # 所有后端接口统一以 /api 开头（页面与静态资源在 /）
+    app.router.add_get("/api/login-info", login_info)
     app.router.add_post("/api/guest", guest_login)
     app.router.add_post("/api/login", id_login)
-    app.router.add_get("/auth/github", github_start)
+    app.router.add_get("/api/auth/github", github_start)
     app.router.add_get(CALLBACK_PATH, github_callback)
-    app.router.add_get("/auth/github/callback", github_callback)  # 兼容旧地址
     app.router.add_post("/api/oauth/exchange", oauth_exchange)
     app.router.add_get("/api/maps", maps)
     app.router.add_get("/api/health", health)
-    app.router.add_get("/gamesocket", websocket)
+    app.router.add_get("/api/gamesocket", websocket)
     app.router.add_get("/", index)
     app.router.add_static("/", PUBLIC, show_index=False)
     app.on_shutdown.append(_on_shutdown)

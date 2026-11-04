@@ -52,15 +52,15 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         return c, gh
 
     async def github_login(self, c):
-        r = await c.get("/auth/github", allow_redirects=False)
+        r = await c.get("/api/auth/github", allow_redirects=False)
         self.assertEqual(r.status, 302)
         loc = urlparse(r.headers["Location"])
         self.assertEqual(loc.netloc, "github.com")
         q = parse_qs(loc.query)
-        self.assertEqual(q["redirect_uri"][0], "http://bomb.example.com/oauth/callback")
+        self.assertEqual(q["redirect_uri"][0], "http://bomb.example.com/api/oauth/callback")
         self.assertNotIn("scope", q)  # 不申请任何权限范围
         state = q["state"][0]
-        r = await c.get(f"/oauth/callback?code=good-code&state={state}", allow_redirects=False)
+        r = await c.get(f"/api/oauth/callback?code=good-code&state={state}", allow_redirects=False)
         self.assertEqual(r.status, 302)
         frag = r.headers["Location"].split("#", 1)[1]
         self.assertTrue(frag.startswith("oauth="), frag)
@@ -131,7 +131,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_config_endpoint(self):
         c, _ = await self.make(guest=False, github=True)
-        self.assertEqual(await (await c.get("/login-info")).json(), {"guest": False, "github": True, "version": "1.0-beta"})
+        self.assertEqual(await (await c.get("/api/login-info")).json(), {"guest": False, "github": True, "version": "1.0-beta"})
 
     async def test_guest_disabled_blocks_guest_and_id_login(self):
         c, _ = await self.make(guest=False, github=True)
@@ -195,14 +195,14 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_state_is_verified(self):
         c, _ = await self.make(guest=False, github=True)
-        r = await c.get("/oauth/callback?code=good-code&state=forged", allow_redirects=False)
+        r = await c.get("/api/oauth/callback?code=good-code&state=forged", allow_redirects=False)
         self.assertIn("oauth_error=state", r.headers["Location"])
 
     async def test_github_disabled(self):
         c, _ = await self.make(guest=True, github=False)
         # GitHub 登录关闭：相关接口直接 404
-        self.assertEqual((await c.get("/auth/github", allow_redirects=False)).status, 404)
-        self.assertEqual((await c.get("/oauth/callback?code=x&state=y", allow_redirects=False)).status, 404)
+        self.assertEqual((await c.get("/api/auth/github", allow_redirects=False)).status, 404)
+        self.assertEqual((await c.get("/api/oauth/callback?code=x&state=y", allow_redirects=False)).status, 404)
         self.assertEqual((await c.post("/api/oauth/exchange", json={})).status, 404)
 
     async def test_rest_errors_have_code_only(self):
@@ -242,9 +242,9 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_github_lang_from_state(self):
         c, _ = await self.make(guest=False, github=True)
-        r = await c.get("/auth/github?lang=en", allow_redirects=False)
+        r = await c.get("/api/auth/github?lang=en", allow_redirects=False)
         state = parse_qs(urlparse(r.headers["Location"]).query)["state"][0]
-        r = await c.get(f"/oauth/callback?code=good-code&state={state}", allow_redirects=False)
+        r = await c.get(f"/api/oauth/callback?code=good-code&state={state}", allow_redirects=False)
         code = r.headers["Location"].split("#oauth=", 1)[1]
         d = await (await spost(c, "/api/oauth/exchange", {"code": code})).json()
         self.assertEqual(d["user"]["lang"], "en")

@@ -85,7 +85,7 @@ export async function idLogin(id, lang) {
 
 /** 服务器开启了哪些登录方式：{ guest, github }（进入登录页时请求 /login-info） */
 export async function fetchLoginConfig() {
-  const r = await fetch('/login-info');
+  const r = await fetch('/api/login-info');
   return r.json();
 }
 
@@ -122,7 +122,7 @@ export class Connection {
 
   connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/gamesocket?session=${encodeURIComponent(this.session)}`);
+    const ws = new WebSocket(`${proto}://${location.host}/api/gamesocket?session=${encodeURIComponent(this.session)}`);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     this.channel = null;

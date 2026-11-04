@@ -73,7 +73,7 @@ class SecureWS:
 async def sws(client, login: dict, create_character: bool = True) -> SecureWS:
     """用登录响应（session + key）建立加密 WebSocket。
     新账号默认先创建角色（沿用当前名字 / 外观），期间收到的其他消息原样保留给测试。"""
-    ws = await client.ws_connect("/gamesocket?session=" + login["session"])
+    ws = await client.ws_connect("/api/gamesocket?session=" + login["session"])
     hello = await ws.receive_json()
     assert hello["t"] == "hello", hello
     sw = SecureWS(ws, secure.Channel(secure.unb64(login["key"]), hello["c"], secure.C2S))

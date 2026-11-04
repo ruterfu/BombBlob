@@ -13,7 +13,7 @@
 
 | 组件 | 说明 |
 | --- | --- |
-| 游戏服务器 | Python 3.12 + aiohttp，单进程。提供网页、登录接口和加密 WebSocket（`/gamesocket`），所有游戏判定都在服务器 |
+| 游戏服务器 | Python 3.12 + aiohttp，单进程。提供网页、登录接口和加密 WebSocket（`/api/gamesocket`），所有游戏判定都在服务器 |
 | 数据库 | PostgreSQL 13+（推荐 17）。启动时自动建表 / 迁移（`db/init.sql`） |
 | 反向代理 | 必须提供 **HTTPS**：浏览器只在 HTTPS（或 localhost）下开放加密功能，否则无法登录 |
 
@@ -59,7 +59,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 1. GitHub → Settings → Developer settings → **OAuth Apps** → **New OAuth App**
 2. **Homepage URL**：`https://bomb.example.com`
-3. **Authorization callback URL**：`https://bomb.example.com/oauth/callback`（必须与 `PUBLIC_URL` + `/oauth/callback` 完全一致）
+3. **Authorization callback URL**：`https://bomb.example.com/api/oauth/callback`（必须与 `PUBLIC_URL` + `/api/oauth/callback` 完全一致）
 4. 创建后复制 **Client ID**；点 **Generate a new client secret** 得到 **Client Secret**
 
 说明：
@@ -107,7 +107,7 @@ docker run -d --name bombblob --network bombblob --restart unless-stopped \
 | 变量 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | ✔ | — | PostgreSQL 连接串。启动时会等待数据库就绪（最多重试 30 次） |
-| `PUBLIC_URL` | 开 GitHub 时 ✔ | 按请求推断 | 对外访问地址（不带结尾 `/`）。OAuth 回调地址 = `PUBLIC_URL/oauth/callback` |
+| `PUBLIC_URL` | 开 GitHub 时 ✔ | 按请求推断 | 对外访问地址（不带结尾 `/`）。OAuth 回调地址 = `PUBLIC_URL/api/oauth/callback` |
 | `RSA_PRIVATE_KEY` | 强烈建议 | `.env.example` 中的公开默认密钥 | 传输加密私钥（PEM 文本或单行 base64），必须与镜像里的 `rsa-public.js` 配对 |
 | `LOGIN_GITHUB` | | `false` | `true` 开启 GitHub 登录（需同时提供 Client ID / Secret，缺少时自动关闭） |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | 开 GitHub 时 ✔ | — | GitHub OAuth App 凭证 |
@@ -120,8 +120,8 @@ docker run -d --name bombblob --network bombblob --restart unless-stopped \
 - `LOGIN_GUEST` 与 `LOGIN_GITHUB` **都没开**：服务器拒绝启动。
 - 某一种关闭时，它对应的接口**直接返回 404**：
   - 游客登录关闭：`/api/guest`、`/api/login`
-  - GitHub 登录关闭：`/auth/github`、`/oauth/callback`、`/api/oauth/exchange`
-- 登录页进入时请求 `/login-info`（只返回 `{"guest": …, "github": …}`），据此只显示开启的登录方式：
+  - GitHub 登录关闭：`/api/auth/github`、`/api/oauth/callback`、`/api/oauth/exchange`
+- 登录页进入时请求 `/api/login-info`（只返回 `{"guest": …, "github": …, "version": …}`），据此只显示开启的登录方式：
   - 只开 GitHub：只有「GitHub 登录」；
   - 只开游客：「请输入 8 位 ID」输入框 + 「游客登录」；
   - 都开：三者都显示。
@@ -143,7 +143,7 @@ docker run -d --name bombblob --network bombblob --restart unless-stopped \
 
 ## 6. HTTPS 反向代理
 
-反向代理需要：终止 TLS、**透传 WebSocket（`/gamesocket`）**、转发 `X-Forwarded-Proto` / `X-Forwarded-Host`。
+反向代理需要：终止 TLS、**透传 WebSocket（`/api/gamesocket`）**、转发 `X-Forwarded-Proto` / `X-Forwarded-Host`。
 
 ### Nginx
 
@@ -154,7 +154,7 @@ server {
     ssl_certificate     /etc/letsencrypt/live/bomb.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/bomb.example.com/privkey.pem;
 
-    location /gamesocket {
+    location /api/gamesocket {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -206,7 +206,7 @@ docker logs bombblob | head                      # 启动行显示登录方式�
 1. 打开 `https://bomb.example.com`，登录页只显示开启的登录方式；
 2. GitHub 登录：授权页**不要求任何权限**，新账号回调后进入「创建角色」；
 3. 进入大厅、开一局（可加 AI），右上角延迟正常，HUD 里的「同步」接近 `SYNC_HZ`；
-4. 开发者工具 → Network → `/gamesocket`：消息应全部是二进制帧（已加密）。
+4. 开发者工具 → Network → `/api/gamesocket`：消息应全部是二进制帧（已加密）。
 
 ---
 
@@ -297,10 +297,10 @@ docker run -d --name bombblob ...（与第 5 节相同的参数）
 | 服务器启动即退出：`LOGIN_GUEST 与 LOGIN_GITHUB 都未开启` | 至少开启一种登录方式；开 GitHub 时还要提供 `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` |
 | 服务器启动即退出：`rsa-public.js 中的公钥与 RSA_PRIVATE_KEY 不匹配` | 镜像里的公钥和传入的私钥不是同一对。用同一次 `gen_rsa.py` 生成的结果，并重新构建镜像 |
 | 服务器启动即退出：`缺少 RSA_PRIVATE_KEY` | 镜像里缺少 `.env.example` 且没传私钥。传入 `-e RSA_PRIVATE_KEY=…` |
-| 登录页没有 GitHub / 游客按钮 | 对应开关没开（看 `/login-info` 的返回），或开 GitHub 时缺少 Client ID / Secret 被自动关闭（启动日志有提示） |
+| 登录页没有 GitHub / 游客按钮 | 对应开关没开（看 `/api/login-info` 的返回），或开 GitHub 时缺少 Client ID / Secret 被自动关闭（启动日志有提示） |
 | GitHub 页面显示 404 / Page not found | `GITHUB_CLIENT_ID` 填错（多 / 少字符） |
-| GitHub 提示 redirect_uri 不匹配 | OAuth App 的 callback URL 与 `PUBLIC_URL/oauth/callback` 不一致（协议、域名、端口都要相同） |
-| 能打开页面但一直「正在重连」 | 反向代理没有透传 WebSocket：检查 `/gamesocket` 的 `Upgrade` / `Connection` 头 |
+| GitHub 提示 redirect_uri 不匹配 | OAuth App 的 callback URL 与 `PUBLIC_URL/api/oauth/callback` 不一致（协议、域名、端口都要相同） |
+| 能打开页面但一直「正在重连」 | 反向代理没有透传 WebSocket：检查 `/api/gamesocket` 的 `Upgrade` / `Connection` 头 |
 | 玩家频繁断线 | 代理的读超时太短，或网络不稳定。`proxy_read_timeout` 应远大于 4 秒心跳 |
 | 对局画面卡顿 / 其他玩家移动不顺 | 服务器出口带宽不足或 `SYNC_HZ` 太低。带宽够时可调高到 45–60，带宽紧张时调低到 20 |
 | 启动时一直打印「等待数据库就绪」 | `DATABASE_URL` 不对，或数据库容器没在同一个 Docker 网络里 |
