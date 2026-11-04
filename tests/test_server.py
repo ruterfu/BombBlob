@@ -261,6 +261,21 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await recv_until(ws, "pong"))["ts"], 3)
 
     # ---------- 房间 / 地图 / 机器人 ----------
+    async def test_room_options_via_websocket(self):
+        """创建房间 / 修改设置的每个玩法选项都要能经过消息校验到达服务器（复活赛曾被白名单漏掉）。"""
+        a = await self.login("房主")
+        ws = await self.connect(a)
+        await ws.send_json({"t": "createRoom", "name": "选项房", "revive": True, "items": False, "shrink": False, "time": 5, "mode": "team"})
+        room = (await recv_until(ws, "room"))["room"]
+        self.assertEqual({k: room["settings"][k] for k in ("revive", "items", "shrink", "time", "mode")},
+                         {"revive": True, "items": False, "shrink": False, "time": 5, "mode": "team"})
+        await ws.send_json({"t": "settings", "revive": False})
+        room = (await recv_until(ws, "room"))["room"]
+        self.assertFalse(room["settings"]["revive"])
+        await ws.send_json({"t": "settings", "revive": True})
+        room = (await recv_until(ws, "room"))["room"]
+        self.assertTrue(room["settings"]["revive"])
+
     async def test_fourteen_maps_plus_random(self):
         maps = (await (await self.client.get("/api/maps")).json())["maps"]
         self.assertEqual(len(maps), 14)

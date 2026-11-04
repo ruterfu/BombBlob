@@ -1517,7 +1517,7 @@ function showResult(result) {
     const lv0 = levelOf(prev), lv1 = me.level ?? levelOf(total);
     const tier = tierOf(lv1);
     const unlocked = (me.unlocked || []).map((h) => t('hat.' + h)).join(' / ');
-    rw.innerHTML = `<div class="rw-row"><span>${icon('star')}+${me.exp} EXP${me.expBoost ? `<small class="boost-tag">×${me.expBoost / 100}</small>` : ''}</span>${me.points ? `<span class="pts">${icon('gem')}+${me.points}${me.pointsPct ? `<small class="boost-tag">${me.pointsPct}%</small>` : ''}</span>` : ''}</div>
+    rw.innerHTML = `<div class="rw-row"><span>${icon('star')}+${me.exp} EXP${me.expBoost ? `<small class="boost-tag">×${me.expBoost / 100}</small>` : ''}</span>${me.points ? `<span class="pts">${icon('gem')}+${me.points}</span>` : ''}</div>
       ${bonusLine(me)}
       <div class="rw-lv"><span class="rw-badge">${levelBadge(lv0)}</span><div class="expbar big" style="--tc:${tier.color}"><i style="width:${levelProgress(prev) * 100}%"></i><em></em></div></div>
       ${me.levelUp ? `<div class="rw-up" style="--tc:${tier.color}">${t('lv.up', { lv: lv1, tier: t('tier.' + tier.index) })}</div>` : ''}

@@ -94,7 +94,7 @@ def _ping(m: dict) -> dict:
 def _room_settings(m: dict) -> dict:
     return {"name": text(m.get("name")), "mapId": text(m.get("mapId")), "mode": text(m.get("mode")),
             "shrink": boolean(m.get("shrink")), "items": boolean(m.get("items")), "time": integer(m.get("time")),
-            "lives": integer(m.get("lives"))}
+            "revive": boolean(m.get("revive")), "lives": integer(m.get("lives"))}
 
 
 def _create_room(m: dict) -> dict:
