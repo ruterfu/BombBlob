@@ -553,6 +553,11 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 .shop-card .own { font-family: var(--font); font-size: 12px; color: var(--cyan); letter-spacing: .15em; }
 .shop-card .btn { margin-top: auto; width: 100%; justify-content: center; font-size: 14px; padding: 8px 10px; display: inline-flex; gap: 6px; align-items: center; }
 .shop-card .btn .ic { width: 15px; height: 15px; }
+/* 灰掉的按钮外层：鼠标移上去立即显示原因（禁用的按钮本身不触发悬停） */
+.btn-tip { position: relative; display: block; width: 100%; margin-top: auto; }
+.btn-tip > .btn { pointer-events: none; }
+.btn-tip::after { content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); padding: 6px 10px; background: rgba(10,13,20,.96); border: 1px solid var(--line-2); color: var(--text); font-size: 12px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .12s; z-index: 5; }
+.btn-tip:hover::after { opacity: 1; }
 .shop-card.owned { border-color: rgba(54,214,255,.4); }
 .shop-card.equipped { border-color: var(--amber); box-shadow: inset 0 0 24px rgba(255,181,71,.12); }
 .reward .pts .ic { color: #b07cff; }

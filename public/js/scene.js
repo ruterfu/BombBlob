@@ -25,6 +25,7 @@ class FrameClock {
 
 // 文字标签（名字 / 被困倒计时）所在的渲染层：不经过辉光后处理，场景渲染完之后直接画在最上面，保证清晰
 const LABEL_LAYER = 2;
+const POISON_FOG = ['#6a2fa8', '#7d3cc4', '#55248a']; // 毒雾用偏暗的紫色
 const asLabel = (sp) => { sp.layers.set(LABEL_LAYER); sp.material.toneMapped = false; return sp; };
 
 const FACING_ROT = { d: 0, r: Math.PI / 2, u: Math.PI, l: -Math.PI / 2 };
@@ -753,9 +754,11 @@ export function buildBomb(skin, style = '') {
   g.add(spark);
   if (fx) {
     // 特效炸弹：身上一圈柔光
-    const aura = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: fx.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.55 }));
+    // 光晕贴片始终正对镜头，下半截会插进地板；不做深度测试，否则会被地板切出一条直线
+    const aura = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: fx.glow, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true, opacity: 0.55 }));
     aura.position.y = 0.3;
     aura.scale.setScalar(1.1);
+    aura.renderOrder = 2;
     g.add(aura);
   }
   return { group: g, body, spark, baseGlow: fx ? fx.base : 0, style };
@@ -1606,6 +1609,12 @@ export class GameScene {
     sp.position.set(this.tx(x), h, this.tz(y));
     return sp;
   }
+  /** 毒雾：普通混合（不是叠加发光），多团重叠也不会叠成刺眼的白光、不触发辉光 */
+  fogSprite(color, x, y, h) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color, depthWrite: false, transparent: true }));
+    sp.position.set(this.tx(x), h, this.tz(y));
+    return sp;
+  }
   ring(color, x, y) {
     if (!this.ringGeo) this.ringGeo = new THREE.RingGeometry(0.42, 0.5, 48);
     const m = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
@@ -1620,10 +1629,8 @@ export class GameScene {
     const x = i % this.W, y = Math.floor(i / this.W);
     const r = () => Math.random() - 0.5;
     if (style === 'poison') {
-      // 紫色毒气：缓慢上升、扩散、停留更久
-      for (let k = 0; k < 2; k++) {
-        this.spawnFx(this.glowSprite(fx.parts[k % 3], x + r() * 0.5, y + r() * 0.5, 0.3), { life: 1.6 + Math.random() * 0.8, vx: r() * 0.5, vy: 0.35 + Math.random() * 0.3, vz: r() * 0.5, drag: 1.2, s0: 0.7, s1: 2.1, op: 0.75 });
-      }
+      // 紫色毒气：缓慢上升、扩散、停留更久（偏暗的雾，不刺眼）
+      this.spawnFx(this.fogSprite(POISON_FOG[Math.floor(Math.random() * POISON_FOG.length)], x + r() * 0.5, y + r() * 0.5, 0.3), { life: 1.6 + Math.random() * 0.8, vx: r() * 0.5, vy: 0.35 + Math.random() * 0.3, vz: r() * 0.5, drag: 1.2, s0: 0.7, s1: 2.1, op: 0.3 });
     } else if (style === 'water') {
       // 水波：每格一圈小涟漪 + 水花
       this.spawnFx(this.ring(fx.parts[1], x, y), { life: 0.7, s0: 0.5, s1: 1.5, op: 0.8 });
@@ -1641,8 +1648,8 @@ export class GameScene {
     const { x, y } = e;
     const r = () => Math.random() - 0.5;
     if (e.st === 'poison') {
-      for (let k = 0; k < 9; k++) {
-        this.spawnFx(this.glowSprite(fx.parts[k % fx.parts.length], x + r() * 0.6, y + r() * 0.6, 0.35), { life: 2 + Math.random(), vx: r() * 1.4, vy: 0.4 + Math.random() * 0.5, vz: r() * 1.4, drag: 1.1, s0: 0.9, s1: 3.2, op: 0.7 });
+      for (let k = 0; k < 6; k++) {
+        this.spawnFx(this.fogSprite(POISON_FOG[k % POISON_FOG.length], x + r() * 0.6, y + r() * 0.6, 0.35), { life: 2 + Math.random(), vx: r() * 1.4, vy: 0.4 + Math.random() * 0.5, vz: r() * 1.4, drag: 1.1, s0: 0.9, s1: 3.2, op: 0.34 });
       }
       this.burst(x, y, 0.4, 10, fx.parts, 3, 0.1);
     } else if (e.st === 'water') {

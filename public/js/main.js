@@ -3,6 +3,8 @@ import { Connection, guestLogin, idLogin, savedId, fetchLoginConfig, oauthExchan
 import { SKINS, HATS, BASE_HATS, TEAM_COLORS, POWERUPS, BOMB_FX, ITEM_SLOTS, powerSize, drawAvatar, drawMapPreview } from './themes.js';
 import { t, getLang, setLang, onLangChange, applyI18n, displayName, mapText, normalizeLang } from './i18n.js';
 import { MenuStage } from './stage.js';
+// 所有模块（含对局场景）都在启动时静态加载，之后不再请求任何静态资源
+import { GameScene } from './scene.js';
 import { icon, hydrateIcons, drawIcon } from './icons.js';
 import { getMsaa, setMsaa } from './gfx.js';
 import { setLevelTable, levelOf, levelFloor, levelCeil, levelProgress, tierOf, hatUnlocked, HAT_UNLOCK, levelBadge, setShop, shopItems, shopItem } from './levels.js';
@@ -379,6 +381,7 @@ function boostShopSection(u) {
     const row = rows[c.kind] || (rows[c.kind] = sec.appendChild(Object.assign(document.createElement('div'), { className: 'shop-row' })));
     const cur = u.boosts?.[c.kind];
     const active = cur?.pct === c.pct;
+    const lower = !!cur && cur.pct > c.pct; // 已有更高倍率生效中：不能买低倍率
     const mult = c.pct / 100;
     const h = c.hours;
     const name = t(c.kind === 'exp' ? 'boost.exp' : 'boost.points', { x: mult });
@@ -386,6 +389,7 @@ function boostShopSection(u) {
     card.className = 'shop-card tool boost-card ' + c.kind + (active ? ' equipped' : '') + (c.price == null ? ' unavailable' : '');
     const short = Math.max(0, (c.price ?? 0) - (u.points || 0));
     const btn = c.price == null ? unavailableBtn()
+      : lower ? `<span class="btn-tip" data-tip="${esc(t('boost.activeName', { name: t(c.kind === 'exp' ? 'boost.exp' : 'boost.points', { x: cur.pct / 100 }) }))}"><button class="btn btn-gray" disabled>${t('shop.buy')}</button></span>`
       : short > 0 ? `<button class="btn btn-gray" disabled>${t('shop.short', { n: short })}</button>`
       : `<button class="btn ${active ? 'btn-blue' : 'btn-yellow'}" data-act="buy">${t(active ? 'boost.extend' : 'shop.buy', { h })}</button>`;
     card.innerHTML = `<div class="tool-ic">${icon(c.kind === 'exp' ? 'star' : 'gem')}<b>×${mult}</b></div><div class="nm">${esc(name)}</div>
@@ -1124,7 +1128,6 @@ $$('.chat-form').forEach((f) => {
 // ================= 游戏 =================
 async function ensureScene() {
   if (scene) return scene;
-  const { GameScene } = await import('./scene.js');
   scene = new GameScene($('#game-view'));
   scene.onMove = (mv) => send({ t: 'mv', ...mv, q: nextSeq() });
   if (new URLSearchParams(location.search).has('debug')) window.__scene = scene; // 调试用

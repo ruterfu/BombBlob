@@ -65,7 +65,7 @@ class Profile:
 
 
 PROFILES: dict[str, Profile] = {
-    "easy": Profile(0.0, (0.35, 0.55), INF, 2, False, 0, 0.12, 2, 0, 4, False, (1.4, 2.2), False, 0.2, False, False, 0.35, 0.2),
+    "easy": Profile(0.0, (0.35, 0.55), INF, 2, False, 0, 0.2, 2, 0, 4, False, (1.4, 2.2), False, 0.2, False, False, 0.35, 0.2),
     "normal": Profile(0.0, (0.1, 0.2), 1.6, 99, True, 8, 0.7, 4, 4, 8, False, (0.5, 0.9), False, 0.15, False, False, 0.5,
                       item_roll=0.5, use_items=frozenset({"ishield", "boots", "ghost", "wings"})),
     "hard": Profile(0.03, (0.0, 0.03), INF, 99, False, 99, 1.0, 99, 99, 99, True, (0.2, 0.4), True, 0.1, True, True, 0.4,
@@ -511,6 +511,21 @@ def think(g: "Game", p: "Player", dt: float) -> None:
                 ai.goal, ai.kind = r[1], kind
                 ai.goal_t = 1.2 if kind in ("hunt", "chase", "rescue", "pop") else 4.0
                 break
+        # 简单：没东西可做时不原地徘徊——朝最近的敌人靠近到 2–3 格（不贴脸追击）；
+        # 看不到敌人就挑一个至少 6 步外的随机位置走过去。选定后坚持走 5 秒。
+        if ai.goal is None and not prof.hunt_radius:
+            ex = [(rnd(e.x), rnd(e.y)) for e in enemies]
+            hx, hy = rnd(p.x), rnd(p.y)
+            if ex:
+                def roam_fn(i: int) -> bool:
+                    x, y = i % W, i // W
+                    return any(2 <= abs(x - a) + abs(y - b) <= 3 for a, b in ex)
+            else:
+                def roam_fn(i: int) -> bool:
+                    return abs(i % W - hx) + abs(i // W - hy) >= 6 and g.rng.random() < 0.2
+            r = bfs(g, p, danger, speed, roam_fn, True)
+            if r and r[1] != here:
+                ai.goal, ai.kind, ai.goal_t = r[1], "roam", 5.0
 
     # 难：主动用道具（追击时开透明人 / 超级跑鞋）
     if prof.smart_items and enemies:

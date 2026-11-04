@@ -6,7 +6,7 @@
   "water":  { "_说明": "水弹（纯画面）", "type": "bomb", "price": 200, "days": 7 },
   "gold":   { "_说明": "金弹（纯画面）", "type": "bomb", "price": 200, "days": 7 },
 
-  "exp150": { "_说明": "1.5 倍经验卡：经验 / 点数各占一个位置；同倍率再买顺延 hours 小时，不同倍率立即替换", "type": "boost", "kind": "exp", "pct": 150, "price": 160, "hours": 24 },
+  "exp150": { "_说明": "1.5 倍经验卡：经验 / 点数各占一个位置；同倍率再买顺延 hours 小时，更高倍率立即替换；有更高倍率生效中时不能买低倍率", "type": "boost", "kind": "exp", "pct": 150, "price": 160, "hours": 24 },
   "exp200": { "_说明": "2 倍经验卡", "type": "boost", "kind": "exp", "pct": 200, "price": 220, "hours": 24 },
   "exp300": { "_说明": "3 倍经验卡", "type": "boost", "kind": "exp", "pct": 300, "price": 300, "hours": 24 },
   "pts150": { "_说明": "1.5 倍点数（钻石）卡", "type": "boost", "kind": "points", "pct": 150, "price": 200, "hours": 24 },

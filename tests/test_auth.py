@@ -503,17 +503,24 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({"t": "buy", "item": "exp200"})
         me = (await self._reply(ws, "me"))["user"]
         self.assertLess(abs(me["boosts"]["exp"]["until"] - (until1 + day)), 5_000)
-        # 不同倍率：立即替换，从现在起 24 小时
+        # 有更高倍率（×2）生效中：不能买低倍率（×1.5），也不扣点数
         await ws.send_json({"t": "buy", "item": "exp150"})
+        self.assertEqual((await self._reply(ws, "error"))["code"], "boost_lower")
+        # 更高倍率：立即替换，从现在起 24 小时
+        await ws.send_json({"t": "buy", "item": "exp300"})
         me = (await self._reply(ws, "me"))["user"]
-        self.assertEqual((me["points"], me["boosts"]["exp"]["pct"]), (580, 150))
+        self.assertEqual((me["points"], me["boosts"]["exp"]["pct"]), (440, 300))
         self.assertLess(abs(me["boosts"]["exp"]["until"] - (_t.time() * 1000 + day)), 60_000)
         # 3 倍点数卡（360）：和经验卡互不影响
         await ws.send_json({"t": "buy", "item": "pts300"})
         me = (await self._reply(ws, "me"))["user"]
-        self.assertEqual((me["points"], me["boosts"]["points"]["pct"], me["boosts"]["exp"]["pct"]), (220, 300, 150))
+        self.assertEqual((me["points"], me["boosts"]["points"]["pct"], me["boosts"]["exp"]["pct"]), (80, 300, 300))
+        await ws.send_json({"t": "buy", "item": "pts150"})  # 点数卡同样不能降级
+        self.assertEqual((await self._reply(ws, "error"))["code"], "boost_lower")
+        store._users[uid]["pointsBoostUntil"] = int(_t.time() * 1000) - 1  # 到期后就可以买低倍率了（但点数不够）
         await ws.send_json({"t": "buy", "item": "pts200"})
         self.assertEqual((await self._reply(ws, "error"))["code"], "item_points")
+        store._users[uid]["pointsBoostUntil"] = int(_t.time() * 1000) + day
         # 结算：经验 ×1.5，点数 ×3
         result = {"mode": "ffa", "mapId": "meadow", "draw": False, "winnerTeam": None, "duration": 60, "players": [
             {"id": uid, "isBot": False, "team": 0, "kills": 2, "rescues": 0, "alive": True, "place": 1, "win": True, "quit": False},
@@ -522,11 +529,11 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*store._bg)
         p = result["players"][0]
         exp0, pts0 = store.reward_for(True, 2, 0)
-        self.assertEqual((p["exp"], p["points"], p["expBoost"], p["pointsPct"]), (exp0 * 3 // 2, pts0 * 3, 150, 300))
+        self.assertEqual((p["exp"], p["points"], p["expBoost"], p["pointsPct"]), (exp0 * 3, pts0 * 3, 300, 300))
         self.assertEqual(p["bonus"], {"card": 200})
         con = await asyncpg.connect(TEST_DSN)
         try:
-            self.assertEqual(await con.fetchval("SELECT points FROM users WHERE id = $1", uid), 220 + pts0 * 3)
+            self.assertEqual(await con.fetchval("SELECT points FROM users WHERE id = $1", uid), 80 + pts0 * 3)
             self.assertEqual(await con.fetchval("SELECT count(*) FROM boost_purchases WHERE user_id = $1", uid), 4)
         finally:
             await con.close()

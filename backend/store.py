@@ -82,7 +82,8 @@ STREAK_PCT, STREAK_MAX = 5, 30
 #   更名卡：可叠加，每次改名消耗 1 张。
 #   炸弹特效（纯画面）：同一时间只有一种生效，再次购买会覆盖之前的，有效期从购买时重新计算。
 #   加成卡：对局获得的经验 / 点数 ×1.5 / ×2 / ×3。经验与点数各占一个位置：
-#     再买同一倍率 → 在当前到期时间上顺延；买不同倍率 → 立即替换，从现在起重新计算。
+#     再买同一倍率 → 在当前到期时间上顺延；买更高倍率 → 立即替换，从现在起重新计算；
+#     有更高倍率生效中时不能买低倍率（boost_lower）。
 # 物品不可用（显示「物品不可用」、不能购买）：price 为 -1、JSON 里缺少该 ID、格式不对，
 # 或内容与 ID 对不上（例如 exp150 的 kind / pct 不是 exp / 150）。
 STORE_ITEMS_FILE = Path(__file__).resolve().parent.parent / "db" / "store_item.json"
@@ -656,13 +657,16 @@ def boost_shop() -> dict:
 
 
 async def _buy_boost(u: dict, item: str) -> dict:
-    """购买加成卡：同一倍率顺延 24 小时，不同倍率替换（从现在起 24 小时）。点数条件写在 UPDATE 里（并发安全）。"""
+    """购买加成卡：同一倍率顺延，更高倍率替换（从现在起重新计算）；有更高倍率生效中时不能买低倍率。
+    点数与「没有更高倍率生效」两个条件都写在 UPDATE 里（并发安全）。"""
     assert _pool is not None
     kind, pct = BOOST_IDS[item]
     price = item_price(item)
     if price is None:
         raise ShopError("item_unavailable")
     hours = STORE_ITEMS[item]["hours"]
+    if active_boost(u, kind) > pct:
+        raise ShopError("boost_lower")  # 已有更高倍率生效中：买低倍率会把它替换掉，不允许
     if u.get("points", 0) < price:
         raise ShopError("item_points")
     col = "exp_boost" if kind == "exp" else "points_boost"
@@ -672,11 +676,14 @@ async def _buy_boost(u: dict, item: str) -> dict:
                    {col}_until = CASE WHEN {col} = $3 AND {col}_until > now() THEN {col}_until ELSE now() END
                                  + make_interval(hours => $4),
                    {col} = $3
-               WHERE id = $1 AND points >= $2 RETURNING points, {col} AS pct, {col}_until AS until""",
+               WHERE id = $1 AND points >= $2 AND NOT ({col} > $3 AND {col}_until > now())
+               RETURNING points, {col} AS pct, {col}_until AS until""",
             u["id"], price, pct, hours,
         )
         if row is None:
-            raise ShopError("item_points")
+            # 区分失败原因：点数不够，还是（并发购买后）已有更高倍率生效
+            cur = await con.fetchrow(f"SELECT points, {col} AS pct, {col}_until > now() AS live FROM users WHERE id = $1", u["id"])
+            raise ShopError("boost_lower" if cur and cur["live"] and cur["pct"] > pct else "item_points")
         await con.execute(
             "INSERT INTO boost_purchases (user_id, kind, pct, price_paid, expires_at) VALUES ($1, $2, $3, $4, $5)",
             u["id"], kind, pct, price, row["until"],
