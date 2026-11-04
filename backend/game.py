@@ -40,7 +40,10 @@ INVULN_RESCUE = 3.0  # 被救活后无敌 3 秒
 INVULN_START = 3.0  # 开局无敌 3 秒
 RESPAWN_TIME = 3.0  # 复活赛：被淘汰后多久自动复活
 INVULN_RESPAWN = 3.0  # 复活后无敌 3 秒
-RANK_BONUS = (25, 15, 5)  # 复活赛：按得分前三名的点数加成（%）
+RANK_BONUS = (25, 15, 5)
+FIXED_BOMBS = 3  # 关闭道具模式：固定可连放 3 个
+FIXED_RANGE = 3  # 关闭道具模式：固定威力 7×7
+AIRDROP_DELAY = (30.0, 80.0)  # 道具模式：箱子炸完、地上道具都被吃掉后，隔多久（随机）空投一个道具  # 复活赛：按得分前三名的点数加成（%）
 BODY_HALF = 0.3  # 角色碰撞半宽（格）
 HIT_OVERLAP = 0.46  # 身体覆盖某格的比例 ≥ 46% 才会被该格火焰命中
 TOUCH_DIST = 0.6  # 两名角色中心距离小于此值视为接触（救援 / 击破）
@@ -294,6 +297,10 @@ class Game:
                 )
             )
         self._by_id = {p.id: p for p in self.players}
+        if not self.items_on:
+            for p in self.players:
+                p.max_bombs, p.range = FIXED_BOMBS, FIXED_RANGE
+        self.airdrop_t: float | None = None
         for p in self.players:
             if p.ai is not None:
                 p.speed_bonus = p.ai.prof.speed_bonus
@@ -564,9 +571,10 @@ class Game:
                 self.explode(b)
 
         self._update_mechanics(dt)
+        self._update_airdrop(dt)
 
         for i in self.reveal:
-            if self.rng.random() < DROP_CHANCE:
+            if self.items_on and self.rng.random() < DROP_CHANCE:
                 self.powerups[i] = kind = pick_powerup(self.rng, self.items_on)
                 if kind in ITEM_KINDS:
                     self._claim_item(i)
@@ -963,7 +971,8 @@ class Game:
                     stop = True
                 elif blk == "g":
                     self.blocks[i] = "."
-                    self.powerups[i] = _weighted(self.rng, CHEST_TABLE)  # 宝箱必出道具
+                    if self.items_on:
+                        self.powerups[i] = _weighted(self.rng, CHEST_TABLE)  # 宝箱必出道具（关闭道具模式时什么都不掉）
                     self.events.append({"k": "chest", "x": x, "y": y})
                     stop = True
                 elif blk == "e":
@@ -1056,7 +1065,7 @@ class Game:
         # 掉落：复活赛掉出身上全部能力道具，普通模式最多 4 个；道具栏里没用掉的道具都会掉出来。
         # 位置由服务器在全图空地中随机挑选。
         self.rng.shuffle(items)
-        drops = (items if respawn else items[:4]) + [it for it in p.items if it]
+        drops = ((items if respawn else items[:4]) + [it for it in p.items if it]) if self.items_on else []
         p.items = [""] * ITEM_SLOTS
         for it in drops:
             if not free:
@@ -1067,7 +1076,8 @@ class Game:
                 self._claim_item(i)
         if respawn:
             # 能力回到初始值，3 秒后复活
-            p.max_bombs, p.range, p.speed_lv, p.kick, p.shield = 1, START_RANGE, 0, False, False
+            p.max_bombs, p.range = (1, START_RANGE) if self.items_on else (FIXED_BOMBS, FIXED_RANGE)
+            p.speed_lv, p.kick, p.shield = 0, False, False
             p.ishield_t = p.boots_t = p.ghost_t = p.wings_t = -1.0
             p.respawn_t = RESPAWN_TIME
 
@@ -1133,6 +1143,34 @@ class Game:
 
     def _shrunk(self, i: int) -> bool:
         return self.sd_started and self.sd_rank.get(i, 1 << 30) < self.sd_index
+
+    def _update_airdrop(self, dt: float) -> None:
+        """道具模式：地图上已经没有能出道具的箱子、地上的道具也都被吃完后，每隔 30–80 秒（随机）空投一个道具。"""
+        if not self.items_on or self.powerups or any(b in ("x", "m", "g") for b in self.blocks):
+            self.airdrop_t = None
+            return
+        if self.airdrop_t is None:
+            self.airdrop_t = self.rng.uniform(*AIRDROP_DELAY)
+            return
+        self.airdrop_t -= dt
+        if self.airdrop_t > 0:
+            return
+        self.airdrop_t = None  # 被吃掉后重新计时
+        free = [
+            i for i, blk in enumerate(self.blocks)
+            if blk in (".", "b") and i not in self.flames and i not in self.tele and self.floor[i] not in ("w", "u")
+            and not self._shrunk(i) and not self.bomb_at(i % self.W, i // self.W)
+        ]
+        if not free:
+            return
+        i = self.rng.choice(free)
+        kind = pick_powerup(self.rng, True)
+        while kind == "slow":  # 空投不投减速鞋
+            kind = pick_powerup(self.rng, True)
+        self.powerups[i] = kind
+        if kind in ITEM_KINDS:
+            self._claim_item(i)
+        self.events.append({"k": "supply", "x": i % self.W, "y": i // self.W})
 
     def _hazard(self, x: int, y: int, rng_: int) -> None:
         """预警一次机关爆炸：先在地上标出范围，HAZARD_WARN 秒后爆炸（不属于任何玩家）。"""
@@ -1202,9 +1240,9 @@ class Game:
         self.mech_t -= dt
         if self.mech_t > 0:
             return
-        if self.pads:  # 星际空港：补给台空投
+        if self.pads:  # 星际空港：补给台空投（关闭道具模式时不空投）
             self.mech_t = SUPPLY_PERIOD
-            for i in self.pads:
+            for i in (self.pads if self.items_on else []):
                 x, y = i % self.W, i // self.W
                 if self.blocks[i] == "." and i not in self.powerups and not self.bomb_at(x, y):
                     kind = _weighted(self.rng, CHEST_TABLE)

@@ -1013,7 +1013,7 @@ function renderRoom() {
     el.className = `member-row${m.id === me ? ' me' : ''}${team ? ' team' + m.team : ''}`;
     el.appendChild(avatarEl(m, 17));
     const status = m.id === r.hostId ? `${icon('crown')}${t('room.host')}` : m.isBot ? `${icon('bot')}${t('room.bot')}` : m.ready ? `${icon('check')}${t('room.isReady')}` : t('room.notReady');
-    el.insertAdjacentHTML('beforeend', `<div class="nm">${esc(displayName(m.name, m.isBot))}${m.level ? levelBadge(m.level) : ''}<div class="st ${m.ready || m.isBot ? 'ready' : ''}">${status}${m.connected ? '' : ` · <span class="off">${t('room.offline')}</span>`}</div></div>`);
+    el.insertAdjacentHTML('beforeend', `<div class="nm"><div class="nmt">${esc(displayName(m.name, m.isBot))}${m.level ? levelBadge(m.level) : ''}</div><div class="st ${m.ready || m.isBot ? 'ready' : ''}">${status}${m.connected ? '' : ` · <span class="off">${t('room.offline')}</span>`}</div></div>`);
     if (m.isBot) {
       // AI 难度：房主可点击修改（形象随难度一起换）
       const lv = AI_LEVELS.includes(m.ai) ? m.ai : 'normal';
@@ -1246,7 +1246,8 @@ function buildHudPlayers() {
     el.style.animationDelay = i * 0.06 + 's';
     if (state.game.mode === 'team') el.style.borderColor = TEAM_COLORS[p.team];
     el.appendChild(avatarEl(p, 22));
-    el.insertAdjacentHTML('beforeend', `<div><div class="n">${p.level ? levelBadge(p.level) : ''}${esc(displayName(p.name, p.isBot))}</div><div class="hearts"></div><div class="pw"></div></div>`);
+    // 两行：名字 + 状态（靠右） / 能力数值 + 击倒数（靠右）；被困倒计时条贴在整行底部
+    el.insertAdjacentHTML('beforeend', `<div class="hp-main"><div class="hp-row"><div class="n">${p.level ? levelBadge(p.level) : ''}${esc(displayName(p.name, p.isBot))}</div><div class="hearts"></div></div><div class="hp-row"><div class="pw"></div><div class="kl"></div></div></div><i class="tbar"></i>`);
     root.appendChild(el);
   });
 }
@@ -1314,12 +1315,14 @@ function onSnapshot(s) {
     el.classList.toggle('dead', !p.a);
     el.classList.toggle('trapped', !!(p.a && p.tr));
     el.querySelector('.hearts').innerHTML = !p.a
-      ? `<span class="out">${t('hud.out')}</span>`
+      ? `<span class="out">${p.rs ? t('hud.respawn', { n: Math.ceil(p.rs) }) : t('hud.out')}</span>`
       : p.tr
-        ? `<span class="trap">${t('hud.trapped', { s: p.tr.toFixed(1) })}</span><i class="bar" style="width:${p.tr * 10}%"></i>`
-        : `<span class="ok">${t(p.iv ? 'hud.invuln' : 'hud.alive')}</span>${p.sh ? `<span class="sh">${icon('shield')}</span>` : ''}`;
+        ? `<span class="trap">${t('hud.trapped', { s: p.tr.toFixed(1) })}</span>`
+        : `${p.sh ? `<span class="sh">${icon('shield')}</span>` : ''}<span class="ok">${t(p.iv ? 'hud.invuln' : 'hud.alive')}</span>`;
+    el.querySelector('.tbar').style.width = p.a && p.tr ? `${p.tr * 10}%` : '0';
     const spd = p.s * 5;
-    el.querySelector('.pw').innerHTML = `<span>${icon('bomb')}${p.mb}</span><span>${icon('flame')}${powerSize(p.r)}</span><span class="${spd > 0 ? 'up' : spd < 0 ? 'down' : ''}">${icon('shoe')}${spd > 0 ? '+' : ''}${spd}%</span>${p.k ? `<span>${icon('kick')}</span>` : ''}<span>${icon('target')}${p.kl}</span>`;
+    el.querySelector('.pw').innerHTML = `<span>${icon('bomb')}${p.mb}</span><span>${icon('flame')}${powerSize(p.r)}</span><span class="${spd > 0 ? 'up' : spd < 0 ? 'down' : ''}">${icon('shoe')}${spd > 0 ? '+' : ''}${spd}%</span>${p.k ? `<span>${icon('kick')}</span>` : ''}`;
+    el.querySelector('.kl').innerHTML = `${icon('target')}${p.kl}`;
   }
 }
 

@@ -264,7 +264,7 @@ kbd { font-family: var(--display); font-size: 13px; padding: 1px 7px; margin: 0 
 .room-ribbon small { font-family: var(--display); letter-spacing: .3em; color: var(--muted); font-size: 12px; }
 .room-ribbon small b { color: var(--amber); }
 .room-ribbon span { font-size: 22px; font-weight: 700; letter-spacing: .06em; }
-.room-members { left: 20px; top: 96px; width: 270px; max-height: calc(100vh - 320px); display: flex; flex-direction: column; padding: 14px; }
+.room-members { left: 20px; top: 96px; width: 290px; max-height: calc(100vh - 320px); display: flex; flex-direction: column; padding: 14px; }
 .member-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; scrollbar-width: none; }
 .member-list::-webkit-scrollbar { display: none; }
 .member-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: rgba(255,255,255,.025); border: 1px solid var(--line); font-size: 13px; }
@@ -272,7 +272,10 @@ kbd { font-family: var(--display); font-size: 13px; padding: 1px 7px; margin: 0 
 .member-row.team0 { box-shadow: inset 3px 0 0 #ff5a5f; }
 .member-row.team1 { box-shadow: inset 3px 0 0 #3d9bff; }
 .member-row canvas { width: 32px; height: 32px; flex: none; }
-.member-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+/* 名字太长只在名字那一行显示省略号；第二行（身份 / AI 难度）不被裁掉 */
+.member-row .nm { flex: 1; min-width: 0; white-space: nowrap; font-weight: 600; }
+.member-row .nm .nmt { overflow: hidden; text-overflow: ellipsis; }
+.member-row .st .ai-lv { flex: none; }
 .member-row .st { font-size: 11px; color: var(--muted); font-weight: 400; display: flex; align-items: center; gap: 4px; margin-top: 2px; }
 .member-row .st.ready { color: var(--green); }
 .member-row .off { color: var(--red); }
@@ -292,7 +295,7 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 .bot-levels button small { color: var(--muted); font-size: 12px; }
 .bot-levels button:hover, .bot-levels button.on { background: color-mix(in srgb, var(--c) 14%, rgba(6,8,12,.5)); border-color: var(--c); }
 .bot-levels button.easy { --c: #4cc38a; } .bot-levels button.normal { --c: #ffb547; } .bot-levels button.hard { --c: #ff5d5d; }
-.room-settings { right: 20px; top: 96px; width: min(560px, 44vw); padding: 12px; }
+.room-settings { right: 20px; top: 96px; width: min(500px, 40vw); padding: 12px; }
 .map-picker { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 .map-card { background: rgba(255,255,255,.025); border: 1px solid var(--line); padding: 3px 3px 4px; text-align: center; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); transition: border-color .15s, color .15s, transform .15s; cursor: pointer; position: relative; }
 .map-card:hover:not(.locked) { border-color: rgba(255,255,255,.3); color: var(--text); transform: translateY(-2px); }
@@ -334,7 +337,7 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 .hud-top { position: absolute; top: 10px; left: 12px; right: 12px; display: flex; align-items: flex-start; justify-content: space-between; pointer-events: none; }
 .hud-top > * { pointer-events: auto; }
 .map-tag { background: rgba(10,13,20,.72); border-left: 2px solid var(--amber); padding: 7px 14px; font-size: 13px; letter-spacing: .14em; backdrop-filter: blur(10px); }
-.timer-badge { position: absolute; left: 50%; top: -10px; transform: translateX(-50%); padding: 14px 34px 8px; background: rgba(10,13,20,.82); clip-path: polygon(0 0, 100% 0, calc(100% - 18px) 100%, 18px 100%); font-family: var(--display); font-size: 40px; letter-spacing: .08em; color: #f2f4f8; backdrop-filter: blur(10px); border-bottom: 2px solid var(--amber); }
+.timer-badge { position: absolute; left: 50%; top: -10px; transform: translateX(-50%); padding: 12px 32px 3px; line-height: 1.05; background: rgba(10,13,20,.82); clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 14px 100%); font-family: var(--display); font-size: 32px; letter-spacing: .08em; color: #f2f4f8; backdrop-filter: blur(10px); border-bottom: 2px solid var(--amber); }
 .timer-badge.sd { color: #fff; background: linear-gradient(180deg, rgba(170,20,35,.9), rgba(90,10,20,.9)); border-bottom-color: var(--red); animation: sdPulse 1s ease-in-out infinite; }
 @keyframes sdPulse { 50% { filter: brightness(1.35); } }
 .hud-right { display: flex; gap: 6px; align-items: center; }
@@ -350,24 +353,31 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 .net { display: flex; gap: 12px; font-size: 11px; letter-spacing: .08em; color: var(--muted); margin-right: 6px; background: rgba(10,13,20,.6); padding: 6px 12px; }
 .net b { font-family: var(--display); font-size: 15px; color: var(--text); font-weight: 400; margin-right: 1px; }
 .hud-right .btn-icon { width: 38px; height: 38px; font-size: 16px; }
-.hud-players { position: absolute; left: 12px; top: 62px; display: flex; flex-direction: column; gap: 4px; width: 200px; pointer-events: none; }
-.hp { display: grid; grid-template-columns: 40px 1fr; gap: 8px; align-items: center; background: rgba(10,13,20,.72); border-left: 2px solid rgba(255,255,255,.2); padding: 4px 10px 4px 4px; backdrop-filter: blur(8px); transition: opacity .3s, filter .3s; animation: rowIn .35s both; }
+.hud-players { position: absolute; left: 12px; top: 62px; display: flex; flex-direction: column; gap: 4px; width: 220px; pointer-events: none; }
+.hp { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 8px; align-items: center; background: rgba(10,13,20,.72); border-left: 2px solid rgba(255,255,255,.2); padding: 4px 10px 4px 4px; backdrop-filter: blur(8px); transition: opacity .3s, filter .3s; animation: rowIn .35s both; }
 .hp.me { border-left-color: var(--amber); background: linear-gradient(90deg, rgba(255,181,71,.14), rgba(10,13,20,.72) 60%); }
 .hp.dead { opacity: .4; filter: grayscale(1); }
 .hp canvas { width: 40px; height: 40px; background: #121722; }
 .hp .n { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hp .hearts { display: flex; gap: 6px; margin: 3px 0 2px; align-items: center; font-size: 11px; letter-spacing: .08em; position: relative; }
+/* 两行布局：名字 + 状态 / 能力数值 + 击倒数，右侧对齐 */
+.hp .hp-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.hp .hp-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.hp .hp-row .n { flex: 1; min-width: 0; }
+.hp .hearts { flex: none; display: flex; gap: 4px; align-items: center; font-size: 11px; letter-spacing: .06em; }
+.hp .kl { flex: none; display: inline-flex; align-items: center; gap: 2px; font-family: var(--display); font-size: 12px; color: var(--muted); }
+.hp .kl .ic { width: 12px; height: 12px; }
+.hp .tbar { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: #36d6ff; box-shadow: 0 0 6px #36d6ff; transition: width .2s linear; }
 .hp .hearts .ok { color: var(--green); }
 .hp .hearts .trap { color: #bfeaff; }
 .hp .hearts .sh { color: var(--cyan); display: inline-flex; }
-.hp .hearts .bar { position: absolute; left: 0; bottom: -3px; height: 2px; width: 0; background: #36d6ff; box-shadow: 0 0 6px #36d6ff; }
 .hp.trapped { border-left-color: #36d6ff; background: linear-gradient(90deg, rgba(54,214,255,.2), rgba(10,13,20,.72) 60%); }
 .hp .pw .up { color: #ff6b6b; }
 .hp .pw .down { color: #3ee08f; }
 .hp .hearts i { width: 14px; height: 4px; background: var(--red); box-shadow: 0 0 6px rgba(255,77,94,.6); }
 .hp .hearts i.sh { background: var(--cyan); box-shadow: 0 0 6px rgba(54,214,255,.7); }
 .hp .hearts .out { font-size: 11px; color: var(--muted); letter-spacing: .1em; }
-.hp .pw { display: flex; gap: 8px; font-family: var(--display); font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+/* 能力数值：放不下时换行，不会超出面板 */
+.hp .pw { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; column-gap: 5px; row-gap: 1px; font-family: var(--display); font-size: 12px; color: var(--muted); letter-spacing: .02em; }
 .hp .pw span { display: inline-flex; align-items: center; gap: 2px; }
 .hp .pw .ic { width: 12px; height: 12px; }
 .hp.hurt { animation: hurt .4s; }
@@ -654,12 +664,12 @@ button.ai-lv { cursor: pointer; } button.ai-lv:hover { background: color-mix(in 
 .bomb-card canvas { width: 110px; height: 110px; }
 /* 房间玩法设置：标题 + 选项 */
 /* 玩法选项：两列卡片，按钮组铺满整张卡片；最后一项（时间限制）横跨两列 */
-.opt-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-.opt-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; background: rgba(255,255,255,.025); border: 1px solid var(--line); }
+.opt-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
+.opt-row { display: flex; flex-direction: column; gap: 5px; padding: 7px 9px 9px; background: rgba(255,255,255,.025); border: 1px solid var(--line); }
 .opt-row:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .opt-row > span { color: var(--muted); font-size: 11px; letter-spacing: .14em; text-align: left; }
 .opt-row .seg { display: flex; width: 100%; }
-.opt-row .seg button { flex: 1; padding: 7px 6px; font-size: 13px; white-space: nowrap; }
+.opt-row .seg button { flex: 1; padding: 6px 6px; font-size: 12px; white-space: nowrap; }
 .opt-row .seg.locked { opacity: .6; }
 /* 道具栏（左下角 6 格） */
 .item-dock { position: absolute; left: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }

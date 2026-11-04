@@ -608,5 +608,50 @@ class StreakAndReviveTests(unittest.TestCase):
         self.assertFalse(self._game().shrink)
 
 
+class ItemModeTests(unittest.TestCase):
+    def _game(self, items):
+        players = [{"id": f"p{i}", "name": f"p{i}", "skin": i, "hat": 0} for i in range(2)]
+        g = Game("meadow", "ffa", 1, players, rng=random.Random(2), items=items, shrink=False)
+        g.phase = "play"
+        return g
+
+    def test_no_items_fixed_3_bombs_7x7_and_no_drops(self):
+        g = self._game(False)
+        self.assertTrue(all((p.max_bombs, p.range) == (3, 3) for p in g.players))
+        # 炸掉一排木箱：一个道具都不掉
+        for k in range(40):
+            g.reveal.append(k)
+        g.update(1 / 60)
+        self.assertEqual(g.powerups, {})
+        a = g.players[0]
+        g.die(a, None)
+        self.assertEqual(g.powerups, {})
+
+    def test_airdrop_after_everything_eaten(self):
+        g = self._game(True)
+        for i, b in enumerate(g.blocks):
+            if b in ("x", "m", "g"):
+                g.blocks[i] = "."
+        g.powerups.clear()
+        g.update(1 / 60)
+        self.assertIsNotNone(g.airdrop_t)
+        self.assertTrue(30 <= g.airdrop_t <= 80)
+        g.airdrop_t = 0.01
+        for p in g.players:
+            p.x, p.y = 1.0, 1.0  # 别站在空投点上把它捡走
+        g.update(1 / 60)
+        self.assertEqual(len(g.powerups), 1)
+        self.assertNotIn("slow", g.powerups.values())
+        self.assertIsNone(g.airdrop_t)
+        g.update(1 / 60)
+        self.assertIsNone(g.airdrop_t)  # 地上还有道具：不计时
+
+    def test_no_airdrop_while_crates_remain(self):
+        g = self._game(True)
+        g.powerups.clear()
+        g.update(1 / 60)
+        self.assertIsNone(g.airdrop_t)
+
+
 if __name__ == "__main__":
     unittest.main()

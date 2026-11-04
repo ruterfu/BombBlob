@@ -23,6 +23,10 @@ class FrameClock {
   }
 }
 
+// 文字标签（名字 / 被困倒计时）所在的渲染层：不经过辉光后处理，场景渲染完之后直接画在最上面，保证清晰
+const LABEL_LAYER = 2;
+const asLabel = (sp) => { sp.layers.set(LABEL_LAYER); sp.material.toneMapped = false; return sp; };
+
 const FACING_ROT = { d: 0, r: Math.PI / 2, u: Math.PI, l: -Math.PI / 2 };
 const MAX_PARTICLES = 600;
 const HIT_RED = new THREE.Color(0.95, 0.05, 0.1);
@@ -1129,7 +1133,7 @@ export class GameScene {
       const isMe = p.id === myId;
       const labelColor = team ? TEAM_COLORS[p.team] : (isMe ? '#ffe45c' : '#ffffff');
       // 组队模式：其他玩家名字前放队伍色圆点；自己用头顶箭头标识
-      const label = textSprite((p.level ? `Lv${p.level} ` : '') + p.name, labelColor, team && !isMe ? TEAM_COLORS[p.team] : null);
+      const label = asLabel(textSprite((p.level ? `Lv${p.level} ` : '') + p.name, labelColor, team && !isMe ? TEAM_COLORS[p.team] : null));
       label.position.y = 1.15;
       blob.group.add(label);
       let arrow = null;
@@ -1152,7 +1156,7 @@ export class GameScene {
       bubble.position.y = 0.42;
       bubble.visible = false;
       blob.group.add(bubble);
-      const trapLabel = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: false }));
+      const trapLabel = asLabel(new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: false })));
       trapLabel.scale.set(0.55, 0.55, 1);
       trapLabel.position.y = 1.6;
       trapLabel.renderOrder = 11;
@@ -2073,6 +2077,13 @@ export class GameScene {
     );
     this.camera.lookAt(this.camTarget);
     this.composer.render();
+    // 文字标签单独画在最上面（不参与辉光）
+    const r = this.renderer;
+    r.autoClear = false;
+    this.camera.layers.set(LABEL_LAYER);
+    r.render(this.scene, this.camera);
+    this.camera.layers.set(0);
+    r.autoClear = true;
   }
 
   /** 搭建棋盘周围的世界：天空、地台、海面 / 雪原 / 霓虹网格、主题装饰、氛围粒子 */
