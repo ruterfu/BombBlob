@@ -50,7 +50,8 @@ kbd { font-family: var(--display); font-size: 13px; padding: 1px 7px; margin: 0 
 /* ---------------- 字标 ---------------- */
 .wordmark { font-family: var(--display); font-weight: 700; font-size: clamp(56px, 7.5vw, 120px); line-height: .9; letter-spacing: .04em; display: flex; gap: .12em; }
 .wordmark span { color: #f2f4f8; text-shadow: 0 2px 30px rgba(255,255,255,.12); }
-.wordmark b { color: transparent; background: linear-gradient(180deg, #ffd27a, #ff8a1f 70%, #c95a10); -webkit-background-clip: text; background-clip: text; filter: drop-shadow(0 0 18px rgba(255,138,31,.45)); }
+/* 渐变文字：行高 0.9 比字形矮，背景只铺在盒子里会把字母上下截掉；上下多铺一点再用负外边距抵消 */
+.wordmark b { display: inline-block; padding: .12em 0; margin: -.12em 0; color: transparent; background: linear-gradient(180deg, #ffd27a 18%, #ff8a1f 64%, #c95a10 86%); -webkit-background-clip: text; background-clip: text; filter: drop-shadow(0 0 18px rgba(255,138,31,.45)); }
 .wordmark.big { font-size: 96px; }
 .tagline { margin-top: 14px; font-size: 15px; letter-spacing: .3em; color: var(--muted); display: flex; align-items: center; gap: 12px; }
 .tagline i { display: inline-block; width: 40px; height: 2px; background: var(--amber); }
